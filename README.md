@@ -102,6 +102,7 @@ http://127.0.0.1:8080/v1/responses
 | `LISTEN_ADDRESS` | `0.0.0.0` | Адрес внутри процесса/контейнера |
 | `PORT` | `8080` | Порт HTTP-сервера |
 | `SPOOF_PROFILE` | `claude-code` | `claude-code` или `codex` |
+| `FORCE_SEQUENTIAL_TOOLS` | `true` | Один tool call за ход для совместимости с IDE |
 | `PROXY_AUTH_TOKEN` | пусто | Требовать `X-Proxy-Token` на API и metrics |
 | `RESPONSE_HEADER_TIMEOUT` | `5m` | Ожидание upstream response headers |
 | `SSE_IDLE_TIMEOUT` | `10m` | Максимальная пауза между байтами upstream body |

@@ -21,26 +21,28 @@ type streamTool struct {
 }
 
 type chatStreamState struct {
-	ID           string
-	Model        string
-	RequestID    string
-	Created      int64
-	RoleSent     bool
-	Finalized    bool
-	SawTool      bool
-	IncludeUsage bool
-	NextTool     int
-	Tools        []*streamTool
-	ByOutput     map[int]*streamTool
-	ByItemID     map[string]*streamTool
-	ByCallID     map[string]*streamTool
+	ID                   string
+	Model                string
+	RequestID            string
+	Created              int64
+	RoleSent             bool
+	Finalized            bool
+	SawTool              bool
+	IncludeUsage         bool
+	ForceSequentialTools bool
+	NextTool             int
+	Tools                []*streamTool
+	ByOutput             map[int]*streamTool
+	ByItemID             map[string]*streamTool
+	ByCallID             map[string]*streamTool
 }
 
 func newChatStreamState(meta requestMeta) *chatStreamState {
 	return &chatStreamState{
 		ID: fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()), Model: meta.Model,
 		RequestID: meta.RequestID, Created: time.Now().Unix(), IncludeUsage: meta.IncludeUsage,
-		ByOutput: make(map[int]*streamTool), ByItemID: make(map[string]*streamTool),
+		ForceSequentialTools: meta.ForceSequentialTools,
+		ByOutput:             make(map[int]*streamTool), ByItemID: make(map[string]*streamTool),
 		ByCallID: make(map[string]*streamTool),
 	}
 }
@@ -406,8 +408,15 @@ func finalizeChatStream(w http.ResponseWriter, state *chatStreamState, reason st
 	if err := ensureRole(w, state); err != nil {
 		return err
 	}
-	toolCalls := make([]any, 0, len(state.Tools))
-	for _, tool := range state.Tools {
+	tools := state.Tools
+	if state.ForceSequentialTools && len(tools) > 1 {
+		logEvent("warn", "parallel_tools_suppressed", map[string]any{
+			"request_id": state.RequestID, "returned": len(tools), "forwarded": 1,
+		})
+		tools = tools[:1]
+	}
+	toolCalls := make([]any, 0, len(tools))
+	for _, tool := range tools {
 		arguments := tool.Arguments
 		if arguments == "" || !json.Valid([]byte(arguments)) {
 			if arguments != "" {

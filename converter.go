@@ -13,10 +13,25 @@ import (
 // requestMeta contains the small amount of original Chat Completions state
 // needed while converting the upstream response.
 type requestMeta struct {
-	Model        string
-	Stream       bool
-	IncludeUsage bool
-	RequestID    string
+	Model                string
+	Stream               bool
+	IncludeUsage         bool
+	RequestID            string
+	ForceSequentialTools bool
+}
+
+func enforceSequentialTools(raw []byte) ([]byte, error) {
+	request, err := decodeObject(raw)
+	if err != nil {
+		return nil, err
+	}
+	tools, _ := request["tools"].([]any)
+	if len(tools) == 0 {
+		return raw, nil
+	}
+	request["parallel_tool_calls"] = false
+	request["max_tool_calls"] = 1
+	return json.Marshal(request)
 }
 
 func decodeObject(raw []byte) (map[string]any, error) {

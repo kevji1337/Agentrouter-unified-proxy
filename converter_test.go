@@ -69,6 +69,21 @@ func TestConvertChatRequest(t *testing.T) {
 	}
 }
 
+func TestEnforceSequentialTools(t *testing.T) {
+	raw := []byte(`{"model":"m","input":"x","tools":[{"type":"function","name":"read_file"}],"parallel_tool_calls":true}`)
+	converted, err := enforceSequentialTools(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request map[string]any
+	if err := json.Unmarshal(converted, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request["parallel_tool_calls"] != false || request["max_tool_calls"].(float64) != 1 {
+		t.Fatalf("sequential policy was not applied: %#v", request)
+	}
+}
+
 func TestConvertResponsesResponse(t *testing.T) {
 	raw := []byte(`{
   "id":"resp_abc","object":"response","created_at":1700000000,"status":"completed","model":"m",
@@ -277,5 +292,32 @@ func TestParallelToolsAreEmittedInOneArray(t *testing.T) {
 		!strings.Contains(result, `"index":1`) || !strings.Contains(result, `"id":"call_graph"`) ||
 		!strings.Contains(result, `"arguments":"{\"query\":\"x\",\"target\":\"y\",\"to\":\"z\"}"`) {
 		t.Fatalf("parallel calls were not kept in their own array positions:\n%s", result)
+	}
+}
+
+func TestSequentialCompatibilitySuppressesExtraTools(t *testing.T) {
+	upstream := strings.Join([]string{
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_read","type":"function_call","call_id":"call_read","name":"read_file"}}`,
+		``,
+		`data: {"type":"response.function_call_arguments.done","output_index":0,"item_id":"fc_read","arguments":"{\"uri\":\"session.md\"}"}`,
+		``,
+		`data: {"type":"response.output_item.added","output_index":1,"item":{"id":"fc_tasks","type":"function_call","call_id":"call_tasks","name":"tasks"}}`,
+		``,
+		`data: {"type":"response.function_call_arguments.done","output_index":1,"item_id":"fc_tasks","arguments":"{\"action\":\"list\"}"}`,
+		``,
+		`data: {"type":"response.completed","response":{"status":"completed"}}`,
+		``,
+	}, "\n")
+	recorder := newFlushRecorder()
+	meta := requestMeta{Model: "m", Stream: true, ForceSequentialTools: true}
+	if err := convertResponsesSSE(recorder, strings.NewReader(upstream), meta); err != nil {
+		t.Fatal(err)
+	}
+	result := recorder.Body.String()
+	if !strings.Contains(result, `"id":"call_read"`) || !strings.Contains(result, `"arguments":"{\"uri\":\"session.md\"}"`) {
+		t.Fatalf("first tool was not preserved:\n%s", result)
+	}
+	if strings.Contains(result, `"id":"call_tasks"`) || strings.Contains(result, `"name":"tasks"`) {
+		t.Fatalf("extra parallel tool was forwarded in sequential mode:\n%s", result)
 	}
 }

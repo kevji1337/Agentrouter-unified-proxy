@@ -38,6 +38,7 @@ type config struct {
 	MaxRetries            int
 	RetryOn5xx            bool
 	MaxBodyBytes          int64
+	ForceSequentialTools  bool
 }
 
 func loadConfig() (config, error) {
@@ -91,12 +92,16 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("RETRY_ON_5XX must be true or false")
 	}
+	forceSequentialTools, err := strconv.ParseBool(envDefault("FORCE_SEQUENTIAL_TOOLS", "true"))
+	if err != nil {
+		return config{}, fmt.Errorf("FORCE_SEQUENTIAL_TOOLS must be true or false")
+	}
 	return config{
 		UpstreamURL: upstream, ListenAddress: envDefault("LISTEN_ADDRESS", "0.0.0.0"),
 		Port: port, Profile: profile, ProxyAuthToken: strings.TrimSpace(os.Getenv("PROXY_AUTH_TOKEN")),
 		ResponseHeaderTimeout: responseTimeout, SSEIdleTimeout: sseTimeout,
 		WarmupInterval: warmupInterval, RetryDelay: retryDelay, MaxRetries: maxRetries,
-		RetryOn5xx: retryOn5xx, MaxBodyBytes: maxBodyBytes,
+		RetryOn5xx: retryOn5xx, MaxBodyBytes: maxBodyBytes, ForceSequentialTools: forceSequentialTools,
 	}, nil
 }
 
@@ -502,7 +507,7 @@ func (server *proxyServer) handleHealth(w http.ResponseWriter, r *http.Request) 
 	payload := map[string]any{
 		"status": status, "upstream": server.cfg.UpstreamURL.String(),
 		"spoof_profile": server.cfg.Profile, "waf_cookie": present,
-		"waf_cookie_names": names,
+		"waf_cookie_names": names, "force_sequential_tools": server.cfg.ForceSequentialTools,
 	}
 	if !updated.IsZero() {
 		payload["waf_cookie_updated_at"] = updated.Format(time.RFC3339)
@@ -574,6 +579,14 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
+	}
+	if server.cfg.ForceSequentialTools {
+		converted, err = enforceSequentialTools(converted)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "conversion_error", err.Error())
+			return
+		}
+		meta.ForceSequentialTools = true
 	}
 	meta.RequestID = requestIDFromContext(r.Context())
 	resp, err := server.doUpstream(r.Context(), r.Header, http.MethodPost, "/v1/responses", converted, meta.Stream)
