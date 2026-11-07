@@ -19,6 +19,8 @@
 - SSE с немедленным flush и idle-timeout;
 - восстановление tool arguments из `arguments.delta`, `arguments.done`,
   `output_item.done` и terminal `response.completed.output`;
+- stateless Responses requests (`store:false`) и автоматическое восстановление
+  после Azure cross-resource item errors;
 - WAF warmup, безопасное конкурентное cookie-хранилище и retry после WAF block;
 - настраиваемые transport/5xx retries;
 - optional `X-Proxy-Token` authentication;

@@ -59,6 +59,15 @@ func TestConvertChatRequest(t *testing.T) {
 	if call["type"] != "function_call" || call["call_id"] != "call_1" {
 		t.Fatalf("tool call conversion failed: %#v", call)
 	}
+	if _, exists := call["id"]; exists {
+		t.Fatalf("resource-bound item id must not be replayed: %#v", call)
+	}
+	if body["store"] != false {
+		t.Fatalf("converted request must be stateless: store=%#v", body["store"])
+	}
+	if _, exists := body["include"]; exists {
+		t.Fatalf("encrypted reasoning include must not be requested: %#v", body["include"])
+	}
 	tool := body["tools"].([]any)[0].(map[string]any)
 	if _, nested := tool["function"]; nested || tool["name"] != "weather" {
 		t.Fatalf("tool was not flattened: %#v", tool)
@@ -81,6 +90,49 @@ func TestEnforceSequentialTools(t *testing.T) {
 	}
 	if request["parallel_tool_calls"] != false || request["max_tool_calls"].(float64) != 1 {
 		t.Fatalf("sequential policy was not applied: %#v", request)
+	}
+}
+
+func TestSanitizeResourceBoundState(t *testing.T) {
+	raw := []byte(`{
+  "model":"m","store":true,"previous_response_id":"resp_old",
+  "include":["reasoning.encrypted_content"],
+  "input":[
+    {"type":"message","id":"msg_1","role":"user","content":[{"type":"input_text","id":"part_1","text":"hi"}]},
+    {"type":"reasoning","id":"rs_1","encrypted_content":"secret"},
+    {"type":"function_call","id":"fc_1","call_id":"call_1","name":"read_file","arguments":"{\"uri\":\"a.md\"}"},
+    {"type":"function_call_output","call_id":"call_1","output":"ok"},
+    {"type":"item_reference","id":"msg_old"}
+  ]
+}`)
+	sanitized, changed, err := sanitizeResourceBoundState(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("resource-bound request was not changed")
+	}
+	var request map[string]any
+	if err := json.Unmarshal(sanitized, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request["store"] != false || request["previous_response_id"] != nil || request["include"] != nil {
+		t.Fatalf("request was not made stateless: %#v", request)
+	}
+	input := request["input"].([]any)
+	if len(input) != 3 {
+		t.Fatalf("sanitized input has %d items, want 3: %#v", len(input), input)
+	}
+	for _, rawItem := range input {
+		item := rawItem.(map[string]any)
+		if _, exists := item["id"]; exists {
+			t.Fatalf("item id survived sanitization: %#v", item)
+		}
+	}
+	call := input[1].(map[string]any)
+	output := input[2].(map[string]any)
+	if call["call_id"] != "call_1" || output["call_id"] != "call_1" {
+		t.Fatalf("call correlation was not preserved: call=%#v output=%#v", call, output)
 	}
 }
 

@@ -78,7 +78,7 @@ func convertChatRequest(raw []byte) ([]byte, requestMeta, error) {
 	out := map[string]any{"model": model, "stream": stream}
 	for _, key := range []string{
 		"temperature", "top_p", "frequency_penalty", "presence_penalty",
-		"parallel_tool_calls", "user", "store", "metadata", "service_tier",
+		"parallel_tool_calls", "user", "metadata", "service_tier",
 		"top_logprobs", "stop", "seed",
 	} {
 		if value, ok := in[key]; ok {
@@ -124,11 +124,12 @@ func convertChatRequest(raw []byte) ([]byte, requestMeta, error) {
 		return nil, requestMeta{}, err
 	}
 	out["input"] = input
+	// AgentRouter may load-balance consecutive requests across independent
+	// Azure OpenAI resources. Stateless requests avoid resource-bound response
+	// and item IDs that another backend cannot resolve.
+	out["store"] = false
 	if instructions != "" {
 		out["instructions"] = instructions
-	}
-	if stream {
-		out["include"] = []string{"reasoning.encrypted_content"}
 	}
 
 	converted, err := json.Marshal(out)
@@ -174,9 +175,9 @@ func convertMessages(messages []any) ([]any, string, error) {
 						"type": "function_call", "call_id": id, "name": name,
 						"arguments": args, "status": "completed",
 					}
-					if id != "" {
-						item["id"] = id
-					}
+					// Do not copy the Chat tool-call ID into Responses `id`.
+					// Responses item IDs are resource-bound on Azure; call_id is
+					// sufficient to correlate the function output.
 					input = append(input, item)
 				}
 			}

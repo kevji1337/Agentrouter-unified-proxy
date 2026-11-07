@@ -678,6 +678,7 @@ func (server *proxyServer) warmup(ctx context.Context) bool {
 func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, method, path string, body []byte, stream bool) (*http.Response, error) {
 	retries := 0
 	wafRetried := false
+	resourceRetried := false
 	for {
 		var requestBody io.Reader
 		if body != nil {
@@ -747,6 +748,29 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 				})
 				server.warmup(ctx)
 				continue
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(raw))
+		}
+		if !resourceRetried && resp.StatusCode == http.StatusBadRequest && body != nil {
+			raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+			_ = resp.Body.Close()
+			if readErr != nil {
+				return nil, readErr
+			}
+			if isForeignAzureResourceError(resp.StatusCode, raw) {
+				sanitized, changed, sanitizeErr := sanitizeResourceBoundState(body)
+				if sanitizeErr != nil {
+					return nil, sanitizeErr
+				}
+				if changed {
+					body = sanitized
+					resourceRetried = true
+					server.metrics.retries.Add(1)
+					logEvent("warn", "azure_resource_state_retry", map[string]any{
+						"request_id": requestIDFromContext(ctx),
+					})
+					continue
+				}
 			}
 			resp.Body = io.NopCloser(bytes.NewReader(raw))
 		}

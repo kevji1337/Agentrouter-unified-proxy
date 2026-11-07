@@ -237,3 +237,40 @@ func TestRetryOn5xx(t *testing.T) {
 		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, calls.Load(), recorder.Body.String())
 	}
 }
+
+func TestAzureResourceMismatchRetriesStateless(t *testing.T) {
+	var calls atomic.Int32
+	secondBody := make(chan map[string]any, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"The requested item was created under a different Azure OpenAI resource. Use the same resource that created the item to access it."}}`))
+			return
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		secondBody <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_ok","object":"response"}`))
+	}))
+	defer upstream.Close()
+	parsed, _ := url.Parse(upstream.URL)
+	proxy := newProxyServer(config{UpstreamURL: parsed, Profile: "claude-code"})
+
+	body := `{"model":"m","previous_response_id":"resp_old","input":[{"type":"message","id":"msg_old","role":"user","content":"next"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	recorder := httptest.NewRecorder()
+	proxy.routes().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK || calls.Load() != 2 {
+		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, calls.Load(), recorder.Body.String())
+	}
+	retried := <-secondBody
+	if retried["store"] != false || retried["previous_response_id"] != nil {
+		t.Fatalf("retry was not stateless: %#v", retried)
+	}
+	item := retried["input"].([]any)[0].(map[string]any)
+	if _, exists := item["id"]; exists {
+		t.Fatalf("resource-bound id survived retry: %#v", item)
+	}
+}
