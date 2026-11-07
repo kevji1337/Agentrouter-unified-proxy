@@ -45,6 +45,7 @@ type config struct {
 	KeyStoreSecret        string
 	KeySelectionMode      string
 	KeyFailover           bool
+	KeyCooldown           time.Duration
 }
 
 func loadConfig() (config, error) {
@@ -114,6 +115,10 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("KEY_FAILOVER must be true or false")
 	}
+	keyCooldown, err := envDuration("KEY_COOLDOWN", 5*time.Minute)
+	if err != nil {
+		return config{}, err
+	}
 	adminToken := strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
 	keyStoreSecret := strings.TrimSpace(os.Getenv("KEY_STORE_SECRET"))
 	if keyStoreSecret == "" {
@@ -128,6 +133,7 @@ func loadConfig() (config, error) {
 		StatelessResponses: statelessResponses,
 		AdminToken:         adminToken, KeyStorePath: envDefault("KEY_STORE_PATH", "/data/keys.json"),
 		KeyStoreSecret: keyStoreSecret, KeySelectionMode: keySelectionMode, KeyFailover: keyFailover,
+		KeyCooldown: keyCooldown,
 	}, nil
 }
 
@@ -837,7 +843,7 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 				return nil, readErr
 			}
 			failedKeyID := selectedKey.ID
-			server.keys.recordResult(failedKeyID, resp.StatusCode, http.StatusText(resp.StatusCode))
+			server.keys.recordResult(failedKeyID, resp.StatusCode, http.StatusText(resp.StatusCode), server.cfg.KeyCooldown)
 			excludedKeys[failedKeyID] = true
 			nextAuth, nextKey, selectErr := server.selectPoolAuthorization(excludedKeys)
 			if selectErr == nil {
@@ -867,7 +873,7 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 			continue
 		}
 		if selectedKey != nil {
-			server.keys.recordResult(selectedKey.ID, resp.StatusCode, http.StatusText(resp.StatusCode))
+			server.keys.recordResult(selectedKey.ID, resp.StatusCode, http.StatusText(resp.StatusCode), server.cfg.KeyCooldown)
 		}
 		return resp, nil
 	}

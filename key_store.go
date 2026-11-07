@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -35,23 +36,25 @@ type persistedAPIKey struct {
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 
-	Uses      uint64    `json:"-"`
-	Failures  uint64    `json:"-"`
-	LastUsed  time.Time `json:"-"`
-	LastError string    `json:"-"`
+	Uses          uint64    `json:"-"`
+	Failures      uint64    `json:"-"`
+	LastUsed      time.Time `json:"-"`
+	LastError     string    `json:"-"`
+	CooldownUntil time.Time `json:"-"`
 }
 
 type apiKeyView struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	Enabled   bool       `json:"enabled"`
-	Mask      string     `json:"mask"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	Uses      uint64     `json:"uses"`
-	Failures  uint64     `json:"failures"`
-	LastUsed  *time.Time `json:"last_used,omitempty"`
-	LastError string     `json:"last_error,omitempty"`
+	ID            string     `json:"id"`
+	Name          string     `json:"name"`
+	Enabled       bool       `json:"enabled"`
+	Mask          string     `json:"mask"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	Uses          uint64     `json:"uses"`
+	Failures      uint64     `json:"failures"`
+	LastUsed      *time.Time `json:"last_used,omitempty"`
+	LastError     string     `json:"last_error,omitempty"`
+	CooldownUntil *time.Time `json:"cooldown_until,omitempty"`
 }
 
 type selectedAPIKey struct {
@@ -71,10 +74,11 @@ type apiKeyStore struct {
 }
 
 type apiKeyStoreStatus struct {
-	Ready   bool   `json:"ready"`
-	Error   string `json:"error,omitempty"`
-	Total   int    `json:"total"`
-	Enabled int    `json:"enabled"`
+	Ready     bool   `json:"ready"`
+	Error     string `json:"error,omitempty"`
+	Total     int    `json:"total"`
+	Enabled   int    `json:"enabled"`
+	Available int    `json:"available"`
 }
 
 func newAPIKeyStore(path, secret string) *apiKeyStore {
@@ -256,6 +260,9 @@ func (store *apiKeyStore) status() apiKeyStoreStatus {
 	for _, key := range store.keys {
 		if key.Enabled {
 			status.Enabled++
+			if key.CooldownUntil.IsZero() || time.Now().After(key.CooldownUntil) {
+				status.Available++
+			}
 		}
 	}
 	return status
@@ -329,7 +336,7 @@ func (store *apiKeyStore) selectNext(excluded map[string]bool) (*selectedAPIKey,
 	for offset := 0; offset < len(store.keys); offset++ {
 		index := (store.next + offset) % len(store.keys)
 		record := &store.keys[index]
-		if !record.Enabled || excluded[record.ID] {
+		if !record.Enabled || excluded[record.ID] || (!record.CooldownUntil.IsZero() && time.Now().Before(record.CooldownUntil)) {
 			continue
 		}
 		plain, err := store.decrypt(*record)
@@ -358,7 +365,7 @@ func (store *apiKeyStore) byID(id string) (*selectedAPIKey, error) {
 	return &selectedAPIKey{ID: id, Name: store.keys[index].Name, Key: plain}, nil
 }
 
-func (store *apiKeyStore) recordResult(id string, status int, message string) {
+func (store *apiKeyStore) recordResult(id string, status int, message string, cooldown time.Duration) {
 	if id == "" {
 		return
 	}
@@ -371,8 +378,12 @@ func (store *apiKeyStore) recordResult(id string, status int, message string) {
 	if status >= 400 {
 		store.keys[index].Failures++
 		store.keys[index].LastError = message
+		if cooldown > 0 && (status == http.StatusUnauthorized || status == http.StatusPaymentRequired || status == http.StatusTooManyRequests) {
+			store.keys[index].CooldownUntil = time.Now().UTC().Add(cooldown)
+		}
 	} else {
 		store.keys[index].LastError = ""
+		store.keys[index].CooldownUntil = time.Time{}
 	}
 }
 
@@ -394,6 +405,10 @@ func keyView(record persistedAPIKey) apiKeyView {
 	if !record.LastUsed.IsZero() {
 		lastUsed := record.LastUsed
 		view.LastUsed = &lastUsed
+	}
+	if !record.CooldownUntil.IsZero() && time.Now().Before(record.CooldownUntil) {
+		cooldownUntil := record.CooldownUntil
+		view.CooldownUntil = &cooldownUntil
 	}
 	return view
 }

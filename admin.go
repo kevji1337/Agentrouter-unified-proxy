@@ -59,7 +59,8 @@ func (server *proxyServer) handleAdminStatus(w http.ResponseWriter, r *http.Requ
 		"status": "ok", "upstream": server.cfg.UpstreamURL.String(), "profile": server.cfg.Profile,
 		"waf_cookie": present, "waf_cookie_updated_at": optionalTime(updated),
 		"selection_mode": server.cfg.KeySelectionMode, "key_failover": server.cfg.KeyFailover,
-		"store": server.keys.status(), "force_sequential_tools": server.cfg.ForceSequentialTools,
+		"key_cooldown": server.cfg.KeyCooldown.String(),
+		"store":        server.keys.status(), "force_sequential_tools": server.cfg.ForceSequentialTools,
 		"stateless_responses": server.cfg.StatelessResponses,
 	})
 }
@@ -151,7 +152,7 @@ func (server *proxyServer) handleAdminKeyTest(w http.ResponseWriter, r *http.Req
 	}
 	started := time.Now()
 	status, message := server.probeAPIKey(r.Context(), key.Key)
-	server.keys.recordResult(id, status, message)
+	server.keys.recordResult(id, status, message, server.cfg.KeyCooldown)
 	result := map[string]any{
 		"ok": status >= 200 && status < 300, "status": status,
 		"duration_ms": time.Since(started).Milliseconds(), "message": message,

@@ -128,6 +128,7 @@ http://127.0.0.1:8080/v1/responses
 | `KEY_STORE_PATH` | `data/keys.json` (`/data/keys.json` в Docker) | Файл зашифрованного key pool |
 | `KEY_SELECTION_MODE` | `inbound-first` | `inbound-first`, `pool-first` или `pool-only` |
 | `KEY_FAILOVER` | `true` | Переключать stored key после 401/402/429 |
+| `KEY_COOLDOWN` | `5m` | Временно исключать ключ после 401/402/429 |
 | `RESPONSE_HEADER_TIMEOUT` | `5m` | Ожидание upstream response headers |
 | `SSE_IDLE_TIMEOUT` | `10m` | Максимальная пауза между байтами upstream body |
 | `WARMUP_INTERVAL` | `3m` | Период обновления WAF-cookie |

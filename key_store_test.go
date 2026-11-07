@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestAPIKeyStoreEncryptsAndManagesKeys(t *testing.T) {
@@ -43,6 +44,15 @@ func TestAPIKeyStoreEncryptsAndManagesKeys(t *testing.T) {
 	selected2, err := store.selectNext(nil)
 	if err != nil || selected2.ID != second.ID {
 		t.Fatalf("second selection = %#v err=%v", selected2, err)
+	}
+	store.recordResult(first.ID, http.StatusTooManyRequests, "rate limited", time.Hour)
+	selectedAfterCooldown, err := store.selectNext(nil)
+	if err != nil || selectedAfterCooldown.ID != second.ID {
+		t.Fatalf("cooling key was selected: %#v err=%v", selectedAfterCooldown, err)
+	}
+	viewsAfterCooldown, _ := store.list()
+	if viewsAfterCooldown[0].CooldownUntil == nil {
+		t.Fatal("cooldown was not exposed in key view")
 	}
 	disabled := false
 	if _, err := store.update(first.ID, nil, &disabled); err != nil {
