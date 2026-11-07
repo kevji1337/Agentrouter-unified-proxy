@@ -2,3 +2,5 @@
 agentrouter-unified-proxy
 agentrouter-unified-proxy.exe
 coverage.out
+data/
+keys.json

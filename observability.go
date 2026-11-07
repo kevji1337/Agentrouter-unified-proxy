@@ -88,7 +88,7 @@ func (metrics *proxyMetrics) observe(path string, status int, duration time.Dura
 	}
 }
 
-func (metrics *proxyMetrics) handler(cookies *cookieStore) http.HandlerFunc {
+func (metrics *proxyMetrics) handler(cookies *cookieStore, keys *apiKeyStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")
@@ -99,6 +99,7 @@ func (metrics *proxyMetrics) handler(cookies *cookieStore) http.HandlerFunc {
 		if cookiePresent {
 			cookieValue = 1
 		}
+		keyStatus := keys.status()
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		_, _ = fmt.Fprintf(w, "# HELP agentrouter_proxy_requests_total Total HTTP requests.\n")
 		_, _ = fmt.Fprintf(w, "# TYPE agentrouter_proxy_requests_total counter\n")
@@ -121,5 +122,8 @@ func (metrics *proxyMetrics) handler(cookies *cookieStore) http.HandlerFunc {
 		_, _ = fmt.Fprintf(w, "agentrouter_proxy_waf_refreshes_total %d\n", metrics.wafRefreshes.Load())
 		_, _ = fmt.Fprintf(w, "# TYPE agentrouter_proxy_retries_total counter\n")
 		_, _ = fmt.Fprintf(w, "agentrouter_proxy_retries_total %d\n", metrics.retries.Load())
+		_, _ = fmt.Fprintf(w, "# TYPE agentrouter_proxy_api_keys gauge\n")
+		_, _ = fmt.Fprintf(w, "agentrouter_proxy_api_keys{state=\"enabled\"} %d\n", keyStatus.Enabled)
+		_, _ = fmt.Fprintf(w, "agentrouter_proxy_api_keys{state=\"total\"} %d\n", keyStatus.Total)
 	}
 }

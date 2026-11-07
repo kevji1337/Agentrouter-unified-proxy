@@ -40,6 +40,11 @@ type config struct {
 	MaxBodyBytes          int64
 	ForceSequentialTools  bool
 	StatelessResponses    bool
+	AdminToken            string
+	KeyStorePath          string
+	KeyStoreSecret        string
+	KeySelectionMode      string
+	KeyFailover           bool
 }
 
 func loadConfig() (config, error) {
@@ -101,6 +106,19 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("STATELESS_RESPONSES must be true or false")
 	}
+	keySelectionMode := strings.ToLower(envDefault("KEY_SELECTION_MODE", "inbound-first"))
+	if keySelectionMode != "inbound-first" && keySelectionMode != "pool-first" && keySelectionMode != "pool-only" {
+		return config{}, fmt.Errorf("KEY_SELECTION_MODE must be inbound-first, pool-first, or pool-only")
+	}
+	keyFailover, err := strconv.ParseBool(envDefault("KEY_FAILOVER", "true"))
+	if err != nil {
+		return config{}, fmt.Errorf("KEY_FAILOVER must be true or false")
+	}
+	adminToken := strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
+	keyStoreSecret := strings.TrimSpace(os.Getenv("KEY_STORE_SECRET"))
+	if keyStoreSecret == "" {
+		keyStoreSecret = adminToken
+	}
 	return config{
 		UpstreamURL: upstream, ListenAddress: envDefault("LISTEN_ADDRESS", "0.0.0.0"),
 		Port: port, Profile: profile, ProxyAuthToken: strings.TrimSpace(os.Getenv("PROXY_AUTH_TOKEN")),
@@ -108,6 +126,8 @@ func loadConfig() (config, error) {
 		WarmupInterval: warmupInterval, RetryDelay: retryDelay, MaxRetries: maxRetries,
 		RetryOn5xx: retryOn5xx, MaxBodyBytes: maxBodyBytes, ForceSequentialTools: forceSequentialTools,
 		StatelessResponses: statelessResponses,
+		AdminToken:         adminToken, KeyStorePath: envDefault("KEY_STORE_PATH", "/data/keys.json"),
+		KeyStoreSecret: keyStoreSecret, KeySelectionMode: keySelectionMode, KeyFailover: keyFailover,
 	}, nil
 }
 
@@ -356,6 +376,7 @@ type proxyServer struct {
 	cookies *cookieStore
 	client  *http.Client
 	metrics *proxyMetrics
+	keys    *apiKeyStore
 }
 
 func newProxyServer(cfg config) *proxyServer {
@@ -368,6 +389,9 @@ func newProxyServer(cfg config) *proxyServer {
 	if cfg.SSEIdleTimeout <= 0 {
 		cfg.SSEIdleTimeout = 10 * time.Minute
 	}
+	if cfg.KeySelectionMode == "" {
+		cfg.KeySelectionMode = "inbound-first"
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConns = 100
 	transport.MaxIdleConnsPerHost = 50
@@ -376,6 +400,7 @@ func newProxyServer(cfg config) *proxyServer {
 	transport.ForceAttemptHTTP2 = true
 	return &proxyServer{
 		cfg: cfg, cookies: newCookieStore(), metrics: &proxyMetrics{},
+		keys: newAPIKeyStore(cfg.KeyStorePath, cfg.KeyStoreSecret),
 		client: &http.Client{
 			Transport: transport,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
@@ -395,12 +420,21 @@ func (server *proxyServer) upstreamURL(path string) string {
 
 func (server *proxyServer) routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/admin", server.handleAdminPage)
+	mux.HandleFunc("/api/admin/", server.handleAdminAPI)
 	mux.HandleFunc("/health", server.handleHealth)
-	mux.HandleFunc("/metrics", server.metrics.handler(server.cookies))
+	mux.HandleFunc("/metrics", server.metrics.handler(server.cookies, server.keys))
 	mux.HandleFunc("/v1/models", server.handleModels)
 	mux.HandleFunc("/models", server.handleModels)
 	mux.HandleFunc("/v1/chat/completions", server.handleChatCompletions)
 	mux.HandleFunc("/v1/responses", server.handleResponses)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" && r.Method == http.MethodGet {
+			http.Redirect(w, r, "/admin", http.StatusTemporaryRedirect)
+			return
+		}
+		writeError(w, http.StatusNotFound, "not_found", "endpoint not found")
+	})
 	return server.requestID(server.logging(cors(server.authenticate(mux))))
 }
 
@@ -422,7 +456,7 @@ func (server *proxyServer) authenticate(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodOptions || r.URL.Path == "/health" {
+		if r.Method == http.MethodOptions || r.URL.Path == "/health" || r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/api/admin/") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -515,6 +549,7 @@ func (server *proxyServer) handleHealth(w http.ResponseWriter, r *http.Request) 
 		"spoof_profile": server.cfg.Profile, "waf_cookie": present,
 		"waf_cookie_names": names, "force_sequential_tools": server.cfg.ForceSequentialTools,
 		"stateless_responses": server.cfg.StatelessResponses,
+		"key_pool":            server.keys.status(), "key_selection_mode": server.cfg.KeySelectionMode,
 	}
 	if !updated.IsZero() {
 		payload["waf_cookie_updated_at"] = updated.Format(time.RFC3339)
@@ -532,7 +567,7 @@ func (server *proxyServer) handleModels(w http.ResponseWriter, r *http.Request) 
 	}
 	resp, err := server.doUpstream(r.Context(), r.Header, http.MethodGet, "/v1/models", nil, false)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
+		writeUpstreamError(w, err)
 		return
 	}
 	defer resp.Body.Close()
@@ -566,7 +601,7 @@ func (server *proxyServer) handleResponses(w http.ResponseWriter, r *http.Reques
 	stream, _ := obj["stream"].(bool)
 	resp, err := server.doUpstream(r.Context(), r.Header, http.MethodPost, "/v1/responses", body, stream)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
+		writeUpstreamError(w, err)
 		return
 	}
 	defer resp.Body.Close()
@@ -606,7 +641,7 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 	meta.RequestID = requestIDFromContext(r.Context())
 	resp, err := server.doUpstream(r.Context(), r.Header, http.MethodPost, "/v1/responses", converted, meta.Stream)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
+		writeUpstreamError(w, err)
 		return
 	}
 	defer resp.Body.Close()
@@ -694,6 +729,11 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 	retries := 0
 	wafRetried := false
 	resourceRetried := false
+	excludedKeys := make(map[string]bool)
+	authHeader, selectedKey, err := server.selectAuthorization(inbound.Get("Authorization"), excludedKeys)
+	if err != nil {
+		return nil, err
+	}
 	for {
 		var requestBody io.Reader
 		if body != nil {
@@ -714,8 +754,8 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 		} else {
 			req.Header.Set("Accept", "application/json")
 		}
-		if auth := inbound.Get("Authorization"); auth != "" {
-			req.Header.Set("Authorization", auth)
+		if authHeader != "" {
+			req.Header.Set("Authorization", authHeader)
 		}
 		if key := inbound.Get("X-Api-Key"); key != "" {
 			req.Header.Set("X-Api-Key", key)
@@ -789,6 +829,29 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 			}
 			resp.Body = io.NopCloser(bytes.NewReader(raw))
 		}
+		if selectedKey != nil && server.cfg.KeyFailover &&
+			(resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusPaymentRequired || resp.StatusCode == http.StatusTooManyRequests) {
+			raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+			_ = resp.Body.Close()
+			if readErr != nil {
+				return nil, readErr
+			}
+			failedKeyID := selectedKey.ID
+			server.keys.recordResult(failedKeyID, resp.StatusCode, http.StatusText(resp.StatusCode))
+			excludedKeys[failedKeyID] = true
+			nextAuth, nextKey, selectErr := server.selectPoolAuthorization(excludedKeys)
+			if selectErr == nil {
+				authHeader, selectedKey = nextAuth, nextKey
+				server.metrics.retries.Add(1)
+				logEvent("warn", "api_key_failover", map[string]any{
+					"request_id": requestIDFromContext(ctx), "status": resp.StatusCode,
+					"failed_key_id": failedKeyID, "next_key_id": nextKey.ID,
+				})
+				continue
+			}
+			selectedKey = nil // failure already recorded; avoid counting it twice
+			resp.Body = io.NopCloser(bytes.NewReader(raw))
+		}
 		if server.cfg.RetryOn5xx && resp.StatusCode >= 500 && resp.StatusCode <= 599 && retries < server.cfg.MaxRetries {
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 			_ = resp.Body.Close()
@@ -803,8 +866,44 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 			}
 			continue
 		}
+		if selectedKey != nil {
+			server.keys.recordResult(selectedKey.ID, resp.StatusCode, http.StatusText(resp.StatusCode))
+		}
 		return resp, nil
 	}
+}
+
+func (server *proxyServer) selectAuthorization(inbound string, excluded map[string]bool) (string, *selectedAPIKey, error) {
+	switch server.cfg.KeySelectionMode {
+	case "pool-only":
+		return server.selectPoolAuthorization(excluded)
+	case "pool-first":
+		auth, key, err := server.selectPoolAuthorization(excluded)
+		if err == nil {
+			return auth, key, nil
+		}
+		if inbound != "" {
+			return inbound, nil, nil
+		}
+		return "", nil, err
+	default:
+		if inbound != "" {
+			return inbound, nil, nil
+		}
+		auth, key, err := server.selectPoolAuthorization(excluded)
+		if errors.Is(err, errNoEnabledAPIKeys) {
+			return "", nil, nil
+		}
+		return auth, key, err
+	}
+}
+
+func (server *proxyServer) selectPoolAuthorization(excluded map[string]bool) (string, *selectedAPIKey, error) {
+	key, err := server.keys.selectNext(excluded)
+	if err != nil {
+		return "", nil, err
+	}
+	return "Bearer " + key.Key, key, nil
 }
 
 func sleepContext(ctx context.Context, duration time.Duration) bool {
@@ -884,6 +983,14 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	}})
 }
 
+func writeUpstreamError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errNoEnabledAPIKeys) {
+		writeError(w, http.StatusServiceUnavailable, "no_enabled_api_keys", "no enabled API keys are available in the configured pool")
+		return
+	}
+	writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
+}
+
 func main() {
 	log.SetFlags(0)
 	cfg, err := loadConfig()
@@ -892,6 +999,10 @@ func main() {
 		os.Exit(1)
 	}
 	proxy := newProxyServer(cfg)
+	if proxy.keys.loadErr != nil {
+		logEvent("error", "key_store_load_error", map[string]any{"error": proxy.keys.loadErr.Error()})
+		os.Exit(1)
+	}
 
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

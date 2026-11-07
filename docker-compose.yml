@@ -1,0 +1,15 @@
+services:
+  agentrouter-unified-proxy:
+    build: .
+    image: agentrouter-unified-proxy:latest
+    container_name: agentrouter-unified-proxy
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - agentrouter-proxy-data:/data
+
+volumes:
+  agentrouter-proxy-data:

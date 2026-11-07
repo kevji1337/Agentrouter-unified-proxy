@@ -37,7 +37,7 @@
 Set-Location 'C:\programming\AgentRouterWAFSpoofing-Proxy'
 Copy-Item .env.example .env
 docker build -t agentrouter-unified-proxy .
-docker run -d --name agentrouter-unified-proxy --restart unless-stopped -p 127.0.0.1:8080:8080 --env-file .env agentrouter-unified-proxy
+docker run -d --name agentrouter-unified-proxy --restart unless-stopped -p 127.0.0.1:8080:8080 --env-file .env -v agentrouter-proxy-data:/data agentrouter-unified-proxy
 ```
 
 Проверка:
@@ -45,6 +45,18 @@ docker run -d --name agentrouter-unified-proxy --restart unless-stopped -p 127.0
 ```powershell
 curl.exe http://127.0.0.1:8080/health
 curl.exe http://127.0.0.1:8080/metrics
+```
+
+Web-панель:
+
+```text
+http://127.0.0.1:8080/admin
+```
+
+После настройки `.env` можно использовать Compose:
+
+```powershell
+docker compose up -d --build
 ```
 
 PowerShell использует обратный апостроф (backtick) `` ` `` для переноса команд,
@@ -93,6 +105,10 @@ http://127.0.0.1:8080/v1/responses
 | `GET` | `/v1/models`, `/models` | Upstream model discovery |
 | `GET` | `/health` | WAF-cookie и состояние сервиса |
 | `GET` | `/metrics` | Prometheus text format |
+| `GET` | `/admin` | Web-панель управления |
+| `GET/POST` | `/api/admin/keys` | Список и добавление stored keys |
+| `PATCH/DELETE` | `/api/admin/keys/{id}` | Включение, переименование и удаление |
+| `POST` | `/api/admin/keys/{id}/test` | Проверка ключа через upstream |
 
 ## Конфигурация
 
@@ -107,6 +123,11 @@ http://127.0.0.1:8080/v1/responses
 | `FORCE_SEQUENTIAL_TOOLS` | `true` | Один tool call за ход для совместимости с IDE |
 | `STATELESS_RESPONSES` | `true` | Удалять Azure resource-bound state до отправки Responses requests |
 | `PROXY_AUTH_TOKEN` | пусто | Требовать `X-Proxy-Token` на API и metrics |
+| `ADMIN_TOKEN` | пусто | Включить и защитить web-панель/API управления |
+| `KEY_STORE_SECRET` | `ADMIN_TOKEN` | Секрет AES-GCM шифрования key store |
+| `KEY_STORE_PATH` | `data/keys.json` (`/data/keys.json` в Docker) | Файл зашифрованного key pool |
+| `KEY_SELECTION_MODE` | `inbound-first` | `inbound-first`, `pool-first` или `pool-only` |
+| `KEY_FAILOVER` | `true` | Переключать stored key после 401/402/429 |
 | `RESPONSE_HEADER_TIMEOUT` | `5m` | Ожидание upstream response headers |
 | `SSE_IDLE_TIMEOUT` | `10m` | Максимальная пауза между байтами upstream body |
 | `WARMUP_INTERVAL` | `3m` | Период обновления WAF-cookie |
@@ -134,6 +155,49 @@ X-Proxy-Token: replace-with-a-long-random-value
 
 `Authorization: Bearer ...` остаётся ключом AgentRouter и не используется как
 proxy token. `/health` намеренно доступен без token для Docker HEALTHCHECK.
+
+## Web-панель и пул API-ключей
+
+Добавьте в `.env` два длинных случайных значения:
+
+```dotenv
+ADMIN_TOKEN=replace-with-random-admin-token
+KEY_STORE_SECRET=replace-with-independent-encryption-secret
+KEY_STORE_PATH=/data/keys.json
+KEY_SELECTION_MODE=inbound-first
+KEY_FAILOVER=true
+```
+
+Пересоздайте контейнер с named volume:
+
+```powershell
+docker run -d --name agentrouter-unified-proxy --restart unless-stopped `
+  -p 127.0.0.1:8080:8080 `
+  --env-file .env `
+  -v agentrouter-proxy-data:/data `
+  agentrouter-unified-proxy
+```
+
+Откройте `http://127.0.0.1:8080/admin` и введите `ADMIN_TOKEN`. Панель позволяет:
+
+- добавлять ключи (enabled/disabled при создании);
+- включать, выключать и удалять;
+- проверять ключ через upstream `/v1/models`;
+- видеть masked credential, usage, failures и last used;
+- контролировать WAF status и routing policy.
+
+Полные ключи никогда не возвращаются API панели и не пишутся в логи. На диске
+они хранятся только как AES-GCM ciphertext. Смена `KEY_STORE_SECRET` без
+повторного добавления ключей сделает существующий файл нечитаемым.
+
+Режимы выбора:
+
+- `inbound-first` — ключ IDE имеет приоритет; pool используется, если его нет;
+- `pool-first` — сначала enabled key из pool, затем входящий ключ;
+- `pool-only` — входящий `Authorization` игнорируется, используется только pool.
+
+В pool используется round-robin. При `KEY_FAILOVER=true` ответы 401, 402 и 429
+переключают текущий запрос на следующий enabled key.
 
 ## Примеры
 

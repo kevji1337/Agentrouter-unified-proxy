@@ -3,3 +3,5 @@
 *.exe
 coverage.out
 README.md
+data
+keys.json
