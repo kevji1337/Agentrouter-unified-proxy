@@ -159,14 +159,38 @@ proxy token. `/health` намеренно доступен без token для D
 
 ## Web-панель и пул API-ключей
 
-Добавьте в `.env` два длинных случайных значения:
+Добавьте в `.env` два длинных случайных значения. Совместимый с Windows
+PowerShell 5.1 скрипт (удаляет старые дубликаты управляемых строк):
+
+```powershell
+function New-RandomSecret {
+  $bytes = New-Object byte[] 32
+  $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+  return (($bytes | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
+$adminToken = New-RandomSecret
+$storeSecret = New-RandomSecret
+$pattern = '^(ADMIN_TOKEN|KEY_STORE_SECRET|KEY_STORE_PATH|KEY_SELECTION_MODE|KEY_FAILOVER|KEY_COOLDOWN)='
+$lines = @((Get-Content .env) | Where-Object { $_ -notmatch $pattern })
+$settings = @('', "ADMIN_TOKEN=$adminToken", "KEY_STORE_SECRET=$storeSecret",
+  'KEY_STORE_PATH=/data/keys.json', 'KEY_SELECTION_MODE=pool-first',
+  'KEY_FAILOVER=true', 'KEY_COOLDOWN=5m')
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+[IO.File]::WriteAllLines((Resolve-Path .env).Path, [string[]]($lines + $settings), $utf8)
+Set-Clipboard $adminToken
+```
+
+Эквивалентная конфигурация вручную:
 
 ```dotenv
 ADMIN_TOKEN=replace-with-random-admin-token
 KEY_STORE_SECRET=replace-with-independent-encryption-secret
 KEY_STORE_PATH=/data/keys.json
-KEY_SELECTION_MODE=inbound-first
+KEY_SELECTION_MODE=pool-first
 KEY_FAILOVER=true
+KEY_COOLDOWN=5m
 ```
 
 Пересоздайте контейнер с named volume:
