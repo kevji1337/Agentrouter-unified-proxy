@@ -6,23 +6,25 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
 
 type streamTool struct {
-	Index            int
-	CallID           string
-	Name             string
-	Arguments        string
-	ArgumentsEmitted bool
-	MismatchLogged   bool
-	Announced        bool
+	Index          int
+	CallID         string
+	Name           string
+	Arguments      string
+	Emitted        bool
+	MismatchLogged bool
+	Announced      bool
 }
 
 type chatStreamState struct {
 	ID           string
 	Model        string
+	RequestID    string
 	Created      int64
 	RoleSent     bool
 	Finalized    bool
@@ -38,7 +40,7 @@ type chatStreamState struct {
 func newChatStreamState(meta requestMeta) *chatStreamState {
 	return &chatStreamState{
 		ID: fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()), Model: meta.Model,
-		Created: time.Now().Unix(), IncludeUsage: meta.IncludeUsage,
+		RequestID: meta.RequestID, Created: time.Now().Unix(), IncludeUsage: meta.IncludeUsage,
 		ByOutput: make(map[int]*streamTool), ByItemID: make(map[string]*streamTool),
 		ByCallID: make(map[string]*streamTool),
 	}
@@ -258,9 +260,6 @@ func ensureRole(w http.ResponseWriter, state *chatStreamState) error {
 }
 
 func announceTool(w http.ResponseWriter, state *chatStreamState, event, item map[string]any) error {
-	if err := ensureRole(w, state); err != nil {
-		return err
-	}
 	outputIndex := intValue(event["output_index"])
 	itemID, _ := item["id"].(string)
 	callID, _ := item["call_id"].(string)
@@ -274,9 +273,6 @@ func announceTool(w http.ResponseWriter, state *chatStreamState, event, item map
 	if existing := findToolByIdentity(state, outputIndex, itemID, callID); existing != nil {
 		if existing.Name == "" && name != "" {
 			existing.Name = name
-			return writeChatChunk(w, state, map[string]any{"tool_calls": []any{map[string]any{
-				"index": existing.Index, "function": map[string]any{"name": name},
-			}}}, nil, nil)
 		}
 		return nil
 	}
@@ -291,10 +287,7 @@ func announceTool(w http.ResponseWriter, state *chatStreamState, event, item map
 		state.ByItemID[itemID] = tool
 	}
 	state.ByCallID[callID] = tool
-	return writeChatChunk(w, state, map[string]any{"tool_calls": []any{map[string]any{
-		"index": tool.Index, "id": callID, "type": "function",
-		"function": map[string]any{"name": name, "arguments": ""},
-	}}}, nil, nil)
+	return nil
 }
 
 func findTool(state *chatStreamState, event map[string]any) *streamTool {
@@ -325,7 +318,7 @@ func emitCompletedToolArguments(w http.ResponseWriter, state *chatStreamState, t
 	if tool == nil || full == "" {
 		return nil
 	}
-	if tool.ArgumentsEmitted {
+	if tool.Emitted {
 		if !jsonStringsEquivalent(tool.Arguments, full) && !tool.MismatchLogged {
 			tool.MismatchLogged = true
 			logEvent("warn", "tool_arguments_mismatch", map[string]any{
@@ -345,14 +338,22 @@ func emitCompletedToolArguments(w http.ResponseWriter, state *chatStreamState, t
 		})
 		tool.Arguments = "{}"
 	}
-	tool.ArgumentsEmitted = true
+	if err := ensureRole(w, state); err != nil {
+		return err
+	}
+	tool.Emitted = true
+	logEvent("info", "tool_call_emitted", map[string]any{
+		"request_id": state.RequestID, "tool": tool.Name, "call_id": tool.CallID,
+		"argument_keys": jsonObjectKeys(tool.Arguments), "arguments_length": len(tool.Arguments),
+	})
 	return writeChatChunk(w, state, map[string]any{"tool_calls": []any{map[string]any{
-		"index": tool.Index, "function": map[string]any{"arguments": tool.Arguments},
+		"index": tool.Index, "id": tool.CallID, "type": "function",
+		"function": map[string]any{"name": tool.Name, "arguments": tool.Arguments},
 	}}}, nil, nil)
 }
 
 func accumulateToolArgumentDelta(tool *streamTool, delta string) {
-	if tool == nil || delta == "" || tool.ArgumentsEmitted {
+	if tool == nil || delta == "" || tool.Emitted {
 		return
 	}
 	if tool.Arguments == "" {
@@ -384,6 +385,19 @@ func jsonStringsEquivalent(left, right string) bool {
 	return string(leftJSON) == string(rightJSON)
 }
 
+func jsonObjectKeys(raw string) []string {
+	var object map[string]any
+	if json.Unmarshal([]byte(raw), &object) != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 func reconcileTerminalTools(w http.ResponseWriter, state *chatStreamState, response map[string]any) error {
 	output, _ := response["output"].([]any)
 	for outputIndex, rawItem := range output {
@@ -404,11 +418,6 @@ func reconcileTerminalTools(w http.ResponseWriter, state *chatStreamState, respo
 		if tool != nil && tool.Name == "" {
 			if name, _ := item["name"].(string); name != "" {
 				tool.Name = name
-				if err := writeChatChunk(w, state, map[string]any{"tool_calls": []any{map[string]any{
-					"index": tool.Index, "function": map[string]any{"name": name},
-				}}}, nil, nil); err != nil {
-					return err
-				}
 			}
 		}
 		if err := emitCompletedToolArguments(w, state, tool, stringValue(item["arguments"], "")); err != nil {
@@ -449,7 +458,7 @@ func finalizeChatStream(w http.ResponseWriter, state *chatStreamState, reason st
 			}
 			arguments = "{}"
 		}
-		if !tool.ArgumentsEmitted {
+		if !tool.Emitted {
 			if err := emitCompletedToolArguments(w, state, tool, arguments); err != nil {
 				return err
 			}

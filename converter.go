@@ -16,6 +16,7 @@ type requestMeta struct {
 	Model        string
 	Stream       bool
 	IncludeUsage bool
+	RequestID    string
 }
 
 func decodeObject(raw []byte) (map[string]any, error) {

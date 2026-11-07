@@ -165,6 +165,12 @@ func TestToolArgumentsRecoveredFromDoneEvent(t *testing.T) {
 	if strings.Contains(result, `"arguments":"{}"`) {
 		t.Fatalf("valid arguments were replaced with empty object:\n%s", result)
 	}
+	if count := strings.Count(result, `"tool_calls":[`); count != 1 {
+		t.Fatalf("tool call must be emitted as one self-contained chunk, got %d:\n%s", count, result)
+	}
+	if !strings.Contains(result, `"id":"call_1"`) || !strings.Contains(result, `"name":"read_file"`) {
+		t.Fatalf("self-contained tool chunk is missing id/name:\n%s", result)
+	}
 }
 
 func TestToolArgumentsRecoveredFromCompletedResponse(t *testing.T) {

@@ -575,6 +575,7 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	meta.RequestID = requestIDFromContext(r.Context())
 	resp, err := server.doUpstream(r.Context(), r.Header, http.MethodPost, "/v1/responses", converted, meta.Stream)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
