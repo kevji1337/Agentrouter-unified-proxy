@@ -12,13 +12,12 @@ import (
 )
 
 type streamTool struct {
-	Index          int
-	CallID         string
-	Name           string
-	Arguments      string
-	Emitted        bool
-	MismatchLogged bool
-	Announced      bool
+	Index     int
+	CallID    string
+	Name      string
+	Arguments string
+	Emitted   bool
+	Announced bool
 }
 
 type chatStreamState struct {
@@ -187,7 +186,8 @@ func handleResponsesEvent(w http.ResponseWriter, event map[string]any, state *ch
 			}
 			tool = findTool(state, event)
 		}
-		return emitCompletedToolArguments(w, state, tool, stringValue(event["arguments"], ""))
+		storeCompletedToolArguments(tool, stringValue(event["arguments"], ""))
+		return nil
 
 	case "response.output_item.done":
 		item, _ := event["item"].(map[string]any)
@@ -201,7 +201,8 @@ func handleResponsesEvent(w http.ResponseWriter, event map[string]any, state *ch
 			}
 			tool = findTool(state, event)
 		}
-		return emitCompletedToolArguments(w, state, tool, stringValue(item["arguments"], ""))
+		storeCompletedToolArguments(tool, stringValue(item["arguments"], ""))
+		return nil
 
 	case "response.completed", "response.done", "response.incomplete", "response.failed":
 		updateStreamIdentity(state, event)
@@ -314,42 +315,14 @@ func findToolByIdentity(state *chatStreamState, outputIndex int, itemID, callID 
 	return state.ByOutput[outputIndex]
 }
 
-func emitCompletedToolArguments(w http.ResponseWriter, state *chatStreamState, tool *streamTool, full string) error {
+func storeCompletedToolArguments(tool *streamTool, full string) {
 	if tool == nil || full == "" {
-		return nil
-	}
-	if tool.Emitted {
-		if !jsonStringsEquivalent(tool.Arguments, full) && !tool.MismatchLogged {
-			tool.MismatchLogged = true
-			logEvent("warn", "tool_arguments_mismatch", map[string]any{
-				"tool": tool.Name, "call_id": tool.CallID,
-				"streamed_length": len(tool.Arguments), "final_length": len(full),
-			})
-		}
-		return nil
+		return
 	}
 	// The terminal value is authoritative. Keeping argument deltas buffered
 	// until this point avoids forwarding cumulative snapshots or placeholders
 	// as if they were incremental Chat Completions deltas.
 	tool.Arguments = full
-	if !json.Valid([]byte(tool.Arguments)) {
-		logEvent("warn", "invalid_streamed_tool_arguments", map[string]any{
-			"tool": tool.Name, "call_id": tool.CallID,
-		})
-		tool.Arguments = "{}"
-	}
-	if err := ensureRole(w, state); err != nil {
-		return err
-	}
-	tool.Emitted = true
-	logEvent("info", "tool_call_emitted", map[string]any{
-		"request_id": state.RequestID, "tool": tool.Name, "call_id": tool.CallID,
-		"argument_keys": jsonObjectKeys(tool.Arguments), "arguments_length": len(tool.Arguments),
-	})
-	return writeChatChunk(w, state, map[string]any{"tool_calls": []any{map[string]any{
-		"index": tool.Index, "id": tool.CallID, "type": "function",
-		"function": map[string]any{"name": tool.Name, "arguments": tool.Arguments},
-	}}}, nil, nil)
 }
 
 func accumulateToolArgumentDelta(tool *streamTool, delta string) {
@@ -370,19 +343,6 @@ func accumulateToolArgumentDelta(tool *streamTool, delta string) {
 		return // duplicate or stale cumulative snapshot
 	}
 	tool.Arguments += delta
-}
-
-func jsonStringsEquivalent(left, right string) bool {
-	if left == right {
-		return true
-	}
-	var leftValue, rightValue any
-	if json.Unmarshal([]byte(left), &leftValue) != nil || json.Unmarshal([]byte(right), &rightValue) != nil {
-		return false
-	}
-	leftJSON, _ := json.Marshal(leftValue)
-	rightJSON, _ := json.Marshal(rightValue)
-	return string(leftJSON) == string(rightJSON)
 }
 
 func jsonObjectKeys(raw string) []string {
@@ -420,9 +380,7 @@ func reconcileTerminalTools(w http.ResponseWriter, state *chatStreamState, respo
 				tool.Name = name
 			}
 		}
-		if err := emitCompletedToolArguments(w, state, tool, stringValue(item["arguments"], "")); err != nil {
-			return err
-		}
+		storeCompletedToolArguments(tool, stringValue(item["arguments"], ""))
 	}
 	return nil
 }
@@ -448,6 +406,7 @@ func finalizeChatStream(w http.ResponseWriter, state *chatStreamState, reason st
 	if err := ensureRole(w, state); err != nil {
 		return err
 	}
+	toolCalls := make([]any, 0, len(state.Tools))
 	for _, tool := range state.Tools {
 		arguments := tool.Arguments
 		if arguments == "" || !json.Valid([]byte(arguments)) {
@@ -458,10 +417,24 @@ func finalizeChatStream(w http.ResponseWriter, state *chatStreamState, reason st
 			}
 			arguments = "{}"
 		}
-		if !tool.Emitted {
-			if err := emitCompletedToolArguments(w, state, tool, arguments); err != nil {
-				return err
-			}
+		if tool.Emitted {
+			continue
+		}
+		tool.Arguments = arguments
+		tool.Emitted = true
+		logEvent("info", "tool_call_emitted", map[string]any{
+			"request_id": state.RequestID, "tool": tool.Name, "call_id": tool.CallID,
+			"tool_index": tool.Index, "argument_keys": jsonObjectKeys(tool.Arguments),
+			"arguments_length": len(tool.Arguments),
+		})
+		toolCalls = append(toolCalls, map[string]any{
+			"index": tool.Index, "id": tool.CallID, "type": "function",
+			"function": map[string]any{"name": tool.Name, "arguments": tool.Arguments},
+		})
+	}
+	if len(toolCalls) > 0 {
+		if err := writeChatChunk(w, state, map[string]any{"tool_calls": toolCalls}, nil, nil); err != nil {
+			return err
 		}
 	}
 	state.Finalized = true

@@ -250,3 +250,32 @@ func TestTerminalToolArgumentsOverrideBufferedDeltas(t *testing.T) {
 		t.Fatalf("terminal arguments did not override buffered deltas:\n%s", result)
 	}
 }
+
+func TestParallelToolsAreEmittedInOneArray(t *testing.T) {
+	upstream := strings.Join([]string{
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_read","type":"function_call","call_id":"call_read","name":"read_file"}}`,
+		``,
+		`data: {"type":"response.function_call_arguments.done","output_index":0,"item_id":"fc_read","arguments":"{\"uri\":\"session.md\"}"}`,
+		``,
+		`data: {"type":"response.output_item.added","output_index":1,"item":{"id":"fc_graph","type":"function_call","call_id":"call_graph","name":"code_graph"}}`,
+		``,
+		`data: {"type":"response.function_call_arguments.done","output_index":1,"item_id":"fc_graph","arguments":"{\"query\":\"x\",\"target\":\"y\",\"to\":\"z\"}"}`,
+		``,
+		`data: {"type":"response.completed","response":{"status":"completed"}}`,
+		``,
+	}, "\n")
+	recorder := newFlushRecorder()
+	if err := convertResponsesSSE(recorder, strings.NewReader(upstream), requestMeta{Model: "m", Stream: true}); err != nil {
+		t.Fatal(err)
+	}
+	result := recorder.Body.String()
+	if count := strings.Count(result, `"tool_calls":[`); count != 1 {
+		t.Fatalf("parallel calls must share one tool_calls array, got %d:\n%s", count, result)
+	}
+	if !strings.Contains(result, `"index":0`) || !strings.Contains(result, `"id":"call_read"`) ||
+		!strings.Contains(result, `"arguments":"{\"uri\":\"session.md\"}"`) ||
+		!strings.Contains(result, `"index":1`) || !strings.Contains(result, `"id":"call_graph"`) ||
+		!strings.Contains(result, `"arguments":"{\"query\":\"x\",\"target\":\"y\",\"to\":\"z\"}"`) {
+		t.Fatalf("parallel calls were not kept in their own array positions:\n%s", result)
+	}
+}
