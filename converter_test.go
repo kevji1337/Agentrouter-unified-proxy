@@ -201,3 +201,46 @@ func TestEmptyToolArgumentsBecomeJSONObject(t *testing.T) {
 		t.Fatalf("empty arguments did not receive JSON fallback:\n%s", recorder.Body.String())
 	}
 }
+
+func TestCumulativeToolArgumentDeltas(t *testing.T) {
+	upstream := strings.Join([]string{
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_4","type":"function_call","call_id":"call_4","name":"read_file","arguments":"{}"}}`,
+		``,
+		`data: {"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_4","delta":"{\"tar"}`,
+		``,
+		`data: {"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_4","delta":"{\"target\":\"note.md\"}"}`,
+		``,
+		`data: {"type":"response.completed","response":{"status":"completed"}}`,
+		``,
+	}, "\n")
+	recorder := newFlushRecorder()
+	if err := convertResponsesSSE(recorder, strings.NewReader(upstream), requestMeta{Model: "m", Stream: true}); err != nil {
+		t.Fatal(err)
+	}
+	result := recorder.Body.String()
+	if !strings.Contains(result, `"arguments":"{\"target\":\"note.md\"}"`) {
+		t.Fatalf("cumulative arguments were not normalized:\n%s", result)
+	}
+	if strings.Contains(result, `{\"tar{\"target`) {
+		t.Fatalf("cumulative snapshots were concatenated:\n%s", result)
+	}
+}
+
+func TestTerminalToolArgumentsOverrideBufferedDeltas(t *testing.T) {
+	upstream := strings.Join([]string{
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_5","type":"function_call","call_id":"call_5","name":"read_file"}}`,
+		``,
+		`data: {"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_5","delta":"broken"}`,
+		``,
+		`data: {"type":"response.completed","response":{"status":"completed","output":[{"id":"fc_5","type":"function_call","call_id":"call_5","name":"read_file","arguments":"{\"target\":\"correct.md\"}"}]}}`,
+		``,
+	}, "\n")
+	recorder := newFlushRecorder()
+	if err := convertResponsesSSE(recorder, strings.NewReader(upstream), requestMeta{Model: "m", Stream: true}); err != nil {
+		t.Fatal(err)
+	}
+	result := recorder.Body.String()
+	if !strings.Contains(result, `"arguments":"{\"target\":\"correct.md\"}"`) || strings.Contains(result, `"arguments":"broken"`) {
+		t.Fatalf("terminal arguments did not override buffered deltas:\n%s", result)
+	}
+}

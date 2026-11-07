@@ -11,11 +11,13 @@ import (
 )
 
 type streamTool struct {
-	Index     int
-	CallID    string
-	Name      string
-	Arguments string
-	Announced bool
+	Index            int
+	CallID           string
+	Name             string
+	Arguments        string
+	ArgumentsEmitted bool
+	MismatchLogged   bool
+	Announced        bool
 }
 
 type chatStreamState struct {
@@ -149,10 +151,7 @@ func handleResponsesEvent(w http.ResponseWriter, event map[string]any, state *ch
 		if item == nil || item["type"] != "function_call" {
 			return nil
 		}
-		if err := announceTool(w, state, event, item); err != nil {
-			return err
-		}
-		return emitCompletedToolArguments(w, state, findTool(state, event), stringValue(item["arguments"], ""))
+		return announceTool(w, state, event, item)
 
 	case "response.function_call_arguments.delta":
 		delta, _ := event["delta"].(string)
@@ -171,11 +170,8 @@ func handleResponsesEvent(w http.ResponseWriter, event map[string]any, state *ch
 		if tool == nil {
 			return nil
 		}
-		tool.Arguments += delta
-		index := tool.Index
-		return writeChatChunk(w, state, map[string]any{"tool_calls": []any{map[string]any{
-			"index": index, "function": map[string]any{"arguments": delta},
-		}}}, nil, nil)
+		accumulateToolArgumentDelta(tool, delta)
+		return nil
 
 	case "response.function_call_arguments.done":
 		tool := findTool(state, event)
@@ -326,26 +322,66 @@ func findToolByIdentity(state *chatStreamState, outputIndex int, itemID, callID 
 }
 
 func emitCompletedToolArguments(w http.ResponseWriter, state *chatStreamState, tool *streamTool, full string) error {
-	if tool == nil || full == "" || full == tool.Arguments {
+	if tool == nil || full == "" {
 		return nil
 	}
-	addition := full
-	if tool.Arguments != "" {
-		if !strings.HasPrefix(full, tool.Arguments) {
+	if tool.ArgumentsEmitted {
+		if !jsonStringsEquivalent(tool.Arguments, full) && !tool.MismatchLogged {
+			tool.MismatchLogged = true
 			logEvent("warn", "tool_arguments_mismatch", map[string]any{
 				"tool": tool.Name, "call_id": tool.CallID,
+				"streamed_length": len(tool.Arguments), "final_length": len(full),
 			})
-			return nil
 		}
-		addition = strings.TrimPrefix(full, tool.Arguments)
-	}
-	if addition == "" {
 		return nil
 	}
-	tool.Arguments += addition
+	// The terminal value is authoritative. Keeping argument deltas buffered
+	// until this point avoids forwarding cumulative snapshots or placeholders
+	// as if they were incremental Chat Completions deltas.
+	tool.Arguments = full
+	if !json.Valid([]byte(tool.Arguments)) {
+		logEvent("warn", "invalid_streamed_tool_arguments", map[string]any{
+			"tool": tool.Name, "call_id": tool.CallID,
+		})
+		tool.Arguments = "{}"
+	}
+	tool.ArgumentsEmitted = true
 	return writeChatChunk(w, state, map[string]any{"tool_calls": []any{map[string]any{
-		"index": tool.Index, "function": map[string]any{"arguments": addition},
+		"index": tool.Index, "function": map[string]any{"arguments": tool.Arguments},
 	}}}, nil, nil)
+}
+
+func accumulateToolArgumentDelta(tool *streamTool, delta string) {
+	if tool == nil || delta == "" || tool.ArgumentsEmitted {
+		return
+	}
+	if tool.Arguments == "" {
+		tool.Arguments = delta
+		return
+	}
+	// Some Responses-compatible gateways send cumulative snapshots in `delta`
+	// instead of true incremental fragments. Support both forms.
+	if strings.HasPrefix(delta, tool.Arguments) {
+		tool.Arguments = delta
+		return
+	}
+	if strings.HasPrefix(tool.Arguments, delta) {
+		return // duplicate or stale cumulative snapshot
+	}
+	tool.Arguments += delta
+}
+
+func jsonStringsEquivalent(left, right string) bool {
+	if left == right {
+		return true
+	}
+	var leftValue, rightValue any
+	if json.Unmarshal([]byte(left), &leftValue) != nil || json.Unmarshal([]byte(right), &rightValue) != nil {
+		return false
+	}
+	leftJSON, _ := json.Marshal(leftValue)
+	rightJSON, _ := json.Marshal(rightValue)
+	return string(leftJSON) == string(rightJSON)
 }
 
 func reconcileTerminalTools(w http.ResponseWriter, state *chatStreamState, response map[string]any) error {
@@ -404,17 +440,19 @@ func finalizeChatStream(w http.ResponseWriter, state *chatStreamState, reason st
 		return err
 	}
 	for _, tool := range state.Tools {
-		if tool.Arguments == "" {
-			// OpenAI clients expect a JSON string. Sending an empty stream often
-			// becomes JavaScript undefined and prevents the tool from running.
-			if err := emitCompletedToolArguments(w, state, tool, "{}"); err != nil {
+		arguments := tool.Arguments
+		if arguments == "" || !json.Valid([]byte(arguments)) {
+			if arguments != "" {
+				logEvent("warn", "invalid_streamed_tool_arguments", map[string]any{
+					"tool": tool.Name, "call_id": tool.CallID,
+				})
+			}
+			arguments = "{}"
+		}
+		if !tool.ArgumentsEmitted {
+			if err := emitCompletedToolArguments(w, state, tool, arguments); err != nil {
 				return err
 			}
-		}
-		if !json.Valid([]byte(tool.Arguments)) {
-			logEvent("warn", "invalid_streamed_tool_arguments", map[string]any{
-				"tool": tool.Name, "call_id": tool.CallID,
-			})
 		}
 	}
 	state.Finalized = true
