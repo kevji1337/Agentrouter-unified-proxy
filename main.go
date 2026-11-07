@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -24,9 +26,18 @@ import (
 const maxRequestBytes = 20 << 20
 
 type config struct {
-	UpstreamURL *url.URL
-	Port        int
-	Profile     string
+	UpstreamURL           *url.URL
+	ListenAddress         string
+	Port                  int
+	Profile               string
+	ProxyAuthToken        string
+	ResponseHeaderTimeout time.Duration
+	SSEIdleTimeout        time.Duration
+	WarmupInterval        time.Duration
+	RetryDelay            time.Duration
+	MaxRetries            int
+	RetryOn5xx            bool
+	MaxBodyBytes          int64
 }
 
 func loadConfig() (config, error) {
@@ -52,7 +63,66 @@ func loadConfig() (config, error) {
 	if profile != "claude-code" && profile != "codex" {
 		return config{}, fmt.Errorf("SPOOF_PROFILE must be claude-code or codex")
 	}
-	return config{UpstreamURL: upstream, Port: port, Profile: profile}, nil
+	responseTimeout, err := envDuration("RESPONSE_HEADER_TIMEOUT", 5*time.Minute)
+	if err != nil {
+		return config{}, err
+	}
+	sseTimeout, err := envDuration("SSE_IDLE_TIMEOUT", 10*time.Minute)
+	if err != nil {
+		return config{}, err
+	}
+	warmupInterval, err := envDuration("WARMUP_INTERVAL", 3*time.Minute)
+	if err != nil {
+		return config{}, err
+	}
+	retryDelay, err := envDuration("RETRY_DELAY", time.Second)
+	if err != nil {
+		return config{}, err
+	}
+	maxRetries, err := envInt("MAX_RETRIES", 2, 0, 10)
+	if err != nil {
+		return config{}, err
+	}
+	maxBodyBytes, err := envInt64("MAX_BODY_BYTES", 20<<20, 1<<20, 1<<30)
+	if err != nil {
+		return config{}, err
+	}
+	retryOn5xx, err := strconv.ParseBool(envDefault("RETRY_ON_5XX", "false"))
+	if err != nil {
+		return config{}, fmt.Errorf("RETRY_ON_5XX must be true or false")
+	}
+	return config{
+		UpstreamURL: upstream, ListenAddress: envDefault("LISTEN_ADDRESS", "0.0.0.0"),
+		Port: port, Profile: profile, ProxyAuthToken: strings.TrimSpace(os.Getenv("PROXY_AUTH_TOKEN")),
+		ResponseHeaderTimeout: responseTimeout, SSEIdleTimeout: sseTimeout,
+		WarmupInterval: warmupInterval, RetryDelay: retryDelay, MaxRetries: maxRetries,
+		RetryOn5xx: retryOn5xx, MaxBodyBytes: maxBodyBytes,
+	}, nil
+}
+
+func envDuration(key string, fallback time.Duration) (time.Duration, error) {
+	value := envDefault(key, fallback.String())
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration (for example 30s or 5m)", key)
+	}
+	return duration, nil
+}
+
+func envInt(key string, fallback, minimum, maximum int) (int, error) {
+	value, err := strconv.Atoi(envDefault(key, strconv.Itoa(fallback)))
+	if err != nil || value < minimum || value > maximum {
+		return 0, fmt.Errorf("%s must be between %d and %d", key, minimum, maximum)
+	}
+	return value, nil
+}
+
+func envInt64(key string, fallback, minimum, maximum int64) (int64, error) {
+	value, err := strconv.ParseInt(envDefault(key, strconv.FormatInt(fallback, 10)), 10, 64)
+	if err != nil || value < minimum || value > maximum {
+		return 0, fmt.Errorf("%s must be between %d and %d", key, minimum, maximum)
+	}
+	return value, nil
 }
 
 func envDefault(key, fallback string) string {
@@ -252,7 +322,9 @@ func (store *cookieStore) warmup(ctx context.Context, upstream *url.URL) bool {
 			store.lastWarmup = time.Now().UTC()
 			store.mu.Unlock()
 			if count > 0 || store.header() != "" {
-				log.Printf("WAF warmup succeeded: status=%d captured=%d", resp.StatusCode, count)
+				logEvent("info", "waf_warmup_succeeded", map[string]any{
+					"status": resp.StatusCode, "captured": count,
+				})
 				return true
 			}
 		}
@@ -264,7 +336,7 @@ func (store *cookieStore) warmup(ctx context.Context, upstream *url.URL) bool {
 			}
 		}
 	}
-	log.Printf("WAF warmup finished without a cookie")
+	logEvent("warn", "waf_warmup_no_cookie", nil)
 	return false
 }
 
@@ -272,17 +344,27 @@ type proxyServer struct {
 	cfg     config
 	cookies *cookieStore
 	client  *http.Client
+	metrics *proxyMetrics
 }
 
 func newProxyServer(cfg config) *proxyServer {
+	if cfg.MaxBodyBytes <= 0 {
+		cfg.MaxBodyBytes = maxRequestBytes
+	}
+	if cfg.RetryDelay <= 0 {
+		cfg.RetryDelay = time.Second
+	}
+	if cfg.SSEIdleTimeout <= 0 {
+		cfg.SSEIdleTimeout = 10 * time.Minute
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConns = 100
 	transport.MaxIdleConnsPerHost = 50
 	transport.IdleConnTimeout = 90 * time.Second
-	transport.ResponseHeaderTimeout = 5 * time.Minute
+	transport.ResponseHeaderTimeout = cfg.ResponseHeaderTimeout
 	transport.ForceAttemptHTTP2 = true
 	return &proxyServer{
-		cfg: cfg, cookies: newCookieStore(),
+		cfg: cfg, cookies: newCookieStore(), metrics: &proxyMetrics{},
 		client: &http.Client{
 			Transport: transport,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
@@ -292,9 +374,9 @@ func newProxyServer(cfg config) *proxyServer {
 	}
 }
 
-func (server *proxyServer) responsesURL() string {
+func (server *proxyServer) upstreamURL(path string) string {
 	target := *server.cfg.UpstreamURL
-	target.Path = strings.TrimRight(target.Path, "/") + "/v1/responses"
+	target.Path = strings.TrimRight(target.Path, "/") + path
 	target.RawPath = ""
 	target.RawQuery = ""
 	return target.String()
@@ -303,21 +385,56 @@ func (server *proxyServer) responsesURL() string {
 func (server *proxyServer) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", server.handleHealth)
+	mux.HandleFunc("/metrics", server.metrics.handler(server.cookies))
+	mux.HandleFunc("/v1/models", server.handleModels)
+	mux.HandleFunc("/models", server.handleModels)
 	mux.HandleFunc("/v1/chat/completions", server.handleChatCompletions)
 	mux.HandleFunc("/v1/responses", server.handleResponses)
-	return server.logging(cors(mux))
+	return server.requestID(server.logging(cors(server.authenticate(mux))))
 }
 
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Api-Key")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Api-Key, X-Proxy-Token, X-Request-ID")
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+func (server *proxyServer) authenticate(next http.Handler) http.Handler {
+	if server.cfg.ProxyAuthToken == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions || r.URL.Path == "/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		provided := r.Header.Get("X-Proxy-Token")
+		valid := len(provided) == len(server.cfg.ProxyAuthToken) &&
+			subtle.ConstantTimeCompare([]byte(provided), []byte(server.cfg.ProxyAuthToken)) == 1
+		if !valid {
+			writeError(w, http.StatusUnauthorized, "proxy_auth_required", "missing or invalid X-Proxy-Token")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (server *proxyServer) requestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestID := validRequestID(r.Header.Get("X-Request-ID"))
+		if requestID == "" {
+			requestID = newRequestID()
+		}
+		w.Header().Set("X-Request-ID", requestID)
+		ctx := context.WithValue(r.Context(), requestIDContextKey{}, requestID)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -362,8 +479,13 @@ func (server *proxyServer) logging(next http.Handler) http.Handler {
 		if status == 0 {
 			status = http.StatusOK
 		}
-		log.Printf("%s %s status=%d bytes=%d duration=%s remote=%s",
-			r.Method, r.URL.Path, status, recorder.bytes, time.Since(start).Round(time.Millisecond), r.RemoteAddr)
+		duration := time.Since(start)
+		server.metrics.observe(r.URL.Path, status, duration)
+		logEvent("info", "request_completed", map[string]any{
+			"request_id": requestIDFromContext(r.Context()), "method": r.Method,
+			"path": r.URL.Path, "status": status, "bytes": recorder.bytes,
+			"duration_ms": duration.Milliseconds(), "remote": r.RemoteAddr,
+		})
 	})
 }
 
@@ -391,12 +513,28 @@ func (server *proxyServer) handleHealth(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, payload)
 }
 
+func (server *proxyServer) handleModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")
+		return
+	}
+	resp, err := server.doUpstream(r.Context(), r.Header, http.MethodGet, "/v1/models", nil, false)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	copyResponseHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+}
+
 func (server *proxyServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use POST")
 		return
 	}
-	body, err := readRequestBody(w, r)
+	body, err := readRequestBody(w, r, server.cfg.MaxBodyBytes)
 	if err != nil {
 		return
 	}
@@ -406,7 +544,7 @@ func (server *proxyServer) handleResponses(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	stream, _ := obj["stream"].(bool)
-	resp, err := server.doUpstream(r.Context(), r.Header, body, stream)
+	resp, err := server.doUpstream(r.Context(), r.Header, http.MethodPost, "/v1/responses", body, stream)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
@@ -415,6 +553,8 @@ func (server *proxyServer) handleResponses(w http.ResponseWriter, r *http.Reques
 	copyResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	if isEventStream(resp.Header) || stream {
+		server.metrics.activeSSE.Add(1)
+		defer server.metrics.activeSSE.Add(-1)
 		streamCopy(w, resp.Body)
 		return
 	}
@@ -426,7 +566,7 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use POST")
 		return
 	}
-	body, err := readRequestBody(w, r)
+	body, err := readRequestBody(w, r, server.cfg.MaxBodyBytes)
 	if err != nil {
 		return
 	}
@@ -435,7 +575,7 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	resp, err := server.doUpstream(r.Context(), r.Header, converted, meta.Stream)
+	resp, err := server.doUpstream(r.Context(), r.Header, http.MethodPost, "/v1/responses", converted, meta.Stream)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
@@ -449,15 +589,19 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 	}
 
 	if meta.Stream {
+		server.metrics.activeSSE.Add(1)
+		defer server.metrics.activeSSE.Add(-1)
 		if isEventStream(resp.Header) {
 			if err := convertResponsesSSE(w, resp.Body, meta); err != nil {
-				log.Printf("SSE conversion ended with error: %v", err)
+				logEvent("error", "sse_conversion_failed", map[string]any{
+					"request_id": requestIDFromContext(r.Context()), "error": err.Error(),
+				})
 			}
 			return
 		}
 		// Some compatible upstreams answer JSON even when stream=true.
-		raw, err := io.ReadAll(io.LimitReader(resp.Body, maxRequestBytes+1))
-		if err != nil || len(raw) > maxRequestBytes {
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, server.cfg.MaxBodyBytes+1))
+		if err != nil || int64(len(raw)) > server.cfg.MaxBodyBytes {
 			writeError(w, http.StatusBadGateway, "upstream_error", "failed to read upstream response")
 			return
 		}
@@ -474,13 +618,13 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadGateway, "upstream_error", "upstream returned SSE for a non-stream request")
 		return
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxRequestBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, server.cfg.MaxBodyBytes+1))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "upstream_error", "failed to read upstream response")
 		return
 	}
-	if len(raw) > maxRequestBytes {
-		writeError(w, http.StatusBadGateway, "upstream_error", "upstream response exceeds 20 MiB")
+	if int64(len(raw)) > server.cfg.MaxBodyBytes {
+		writeError(w, http.StatusBadGateway, "upstream_error", "upstream response exceeds configured limit")
 		return
 	}
 	chat, err := convertResponsesResponse(raw, meta.Model)
@@ -493,14 +637,14 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 	_, _ = w.Write(chat)
 }
 
-func readRequestBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+func readRequestBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, error) {
 	defer r.Body.Close()
-	reader := http.MaxBytesReader(w, r.Body, maxRequestBytes)
+	reader := http.MaxBytesReader(w, r.Body, limit)
 	body, err := io.ReadAll(reader)
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "request exceeds 20 MiB")
+			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "request exceeds configured limit")
 		} else {
 			writeError(w, http.StatusBadRequest, "invalid_request", "failed to read request body")
 		}
@@ -509,14 +653,32 @@ func readRequestBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	return body, nil
 }
 
-func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, body []byte, stream bool) (*http.Response, error) {
-	for attempt := 0; attempt < 2; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.responsesURL(), bytes.NewReader(body))
+func (server *proxyServer) warmup(ctx context.Context) bool {
+	ok := server.cookies.warmup(ctx, server.cfg.UpstreamURL)
+	if ok {
+		server.metrics.wafRefreshes.Add(1)
+	}
+	return ok
+}
+
+func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, method, path string, body []byte, stream bool) (*http.Response, error) {
+	retries := 0
+	wafRetried := false
+	for {
+		var requestBody io.Reader
+		if body != nil {
+			requestBody = bytes.NewReader(body)
+		}
+		attemptCtx, cancel := context.WithCancel(ctx)
+		req, err := http.NewRequestWithContext(attemptCtx, method, server.upstreamURL(path), requestBody)
 		if err != nil {
+			cancel()
 			return nil, err
 		}
 		req.Header = spoofHeaders(server.cfg.Profile)
-		req.Header.Set("Content-Type", "application/json")
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
 		if stream {
 			req.Header.Set("Accept", "text/event-stream")
 		} else {
@@ -528,31 +690,79 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 		if key := inbound.Get("X-Api-Key"); key != "" {
 			req.Header.Set("X-Api-Key", key)
 		}
+		if requestID := requestIDFromContext(ctx); requestID != "" {
+			req.Header.Set("X-Request-ID", requestID)
+		}
 		if cookie := server.cookies.header(); cookie != "" {
 			req.Header.Set("Cookie", cookie)
 		}
 
 		resp, err := server.client.Do(req)
 		if err != nil {
+			cancel()
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if retries < server.cfg.MaxRetries {
+				retries++
+				server.metrics.retries.Add(1)
+				logEvent("warn", "upstream_transport_retry", map[string]any{
+					"request_id": requestIDFromContext(ctx), "attempt": retries,
+					"max_retries": server.cfg.MaxRetries, "error": err.Error(),
+				})
+				if !sleepContext(ctx, server.cfg.RetryDelay*time.Duration(1<<(retries-1))) {
+					return nil, ctx.Err()
+				}
+				continue
+			}
 			return nil, err
 		}
+		resp.Body = newIdleTimeoutBody(resp.Body, cancel, server.cfg.SSEIdleTimeout)
 		server.cookies.capture(resp.Header)
-		if attempt == 0 && (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusMethodNotAllowed) {
+		if !wafRetried && (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusMethodNotAllowed) {
 			raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 			_ = resp.Body.Close()
 			if readErr != nil {
 				return nil, readErr
 			}
 			if isWafBlock(resp.StatusCode, raw) {
-				log.Printf("WAF block detected (status=%d), refreshing cookie and retrying once", resp.StatusCode)
-				server.cookies.warmup(ctx, server.cfg.UpstreamURL)
+				wafRetried = true
+				server.metrics.retries.Add(1)
+				logEvent("warn", "waf_block_retry", map[string]any{
+					"request_id": requestIDFromContext(ctx), "status": resp.StatusCode,
+				})
+				server.warmup(ctx)
 				continue
 			}
 			resp.Body = io.NopCloser(bytes.NewReader(raw))
 		}
+		if server.cfg.RetryOn5xx && resp.StatusCode >= 500 && resp.StatusCode <= 599 && retries < server.cfg.MaxRetries {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+			_ = resp.Body.Close()
+			retries++
+			server.metrics.retries.Add(1)
+			logEvent("warn", "upstream_status_retry", map[string]any{
+				"request_id": requestIDFromContext(ctx), "attempt": retries,
+				"status": resp.StatusCode, "max_retries": server.cfg.MaxRetries,
+			})
+			if !sleepContext(ctx, server.cfg.RetryDelay*time.Duration(1<<(retries-1))) {
+				return nil, ctx.Err()
+			}
+			continue
+		}
 		return resp, nil
 	}
-	return nil, errors.New("WAF retry exhausted")
+}
+
+func sleepContext(ctx context.Context, duration time.Duration) bool {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func isWafBlock(status int, body []byte) bool {
@@ -622,31 +832,32 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 }
 
 func main() {
-	log.SetFlags(log.Ldate | log.Ltime | log.LUTC | log.Lmicroseconds)
+	log.SetFlags(0)
 	cfg, err := loadConfig()
 	if err != nil {
-		log.Fatalf("configuration error: %v", err)
+		logEvent("error", "configuration_error", map[string]any{"error": err.Error()})
+		os.Exit(1)
 	}
 	proxy := newProxyServer(cfg)
 
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
-		proxy.cookies.warmup(rootCtx, cfg.UpstreamURL)
-		ticker := time.NewTicker(3 * time.Minute)
+		proxy.warmup(rootCtx)
+		ticker := time.NewTicker(cfg.WarmupInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-rootCtx.Done():
 				return
 			case <-ticker.C:
-				proxy.cookies.warmup(rootCtx, cfg.UpstreamURL)
+				proxy.warmup(rootCtx)
 			}
 		}
 	}()
 
 	httpServer := &http.Server{
-		Addr:              ":" + strconv.Itoa(cfg.Port),
+		Addr:              net.JoinHostPort(cfg.ListenAddress, strconv.Itoa(cfg.Port)),
 		Handler:           proxy.routes(),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
@@ -654,7 +865,9 @@ func main() {
 	}
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("listening on :%d upstream=%s profile=%s", cfg.Port, cfg.UpstreamURL, cfg.Profile)
+		logEvent("info", "proxy_listening", map[string]any{
+			"address": httpServer.Addr, "upstream": cfg.UpstreamURL.String(), "profile": cfg.Profile,
+		})
 		errCh <- httpServer.ListenAndServe()
 	}()
 
@@ -663,11 +876,12 @@ func main() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			log.Printf("shutdown error: %v", err)
+			logEvent("error", "shutdown_error", map[string]any{"error": err.Error()})
 		}
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("server error: %v", err)
+			logEvent("error", "server_error", map[string]any{"error": err.Error()})
+			os.Exit(1)
 		}
 	}
 }

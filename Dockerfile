@@ -6,6 +6,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/proxy .
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates && addgroup -S proxy && adduser -S -G proxy proxy
+LABEL org.opencontainers.image.source="https://github.com/kevji1337/Agentrouter-unified-proxy" \
+      org.opencontainers.image.description="Unified AgentRouter Chat Completions and Responses API proxy" \
+      org.opencontainers.image.licenses="MIT"
 WORKDIR /app
 COPY --from=build /out/proxy /app/proxy
 USER proxy

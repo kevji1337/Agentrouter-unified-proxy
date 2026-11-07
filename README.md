@@ -1,81 +1,187 @@
 # AgentRouter Unified Proxy
 
-Один Go-процесс объединяет преобразование OpenAI Chat Completions → Responses API,
-обратное преобразование ответов/SSE и upstream-прокси с профилями заголовков и
-автоматическим хранением WAF-cookie.
+Один Go-процесс объединяет:
 
-## Запуск
+- OpenAI Chat Completions → Responses API;
+- обратную конвертацию обычных и SSE-ответов;
+- streaming tool calls, vision, structured output и reasoning;
+- spoof-профили `claude-code` / `codex`;
+- получение и ротацию WAF-cookie AgentRouter.
+
+Прокси всегда отправляет генерацию на `${UPSTREAM_URL}/v1/responses` и передаёт
+входящий `Authorization` без изменения.
+
+## Возможности
+
+- один статический Go-бинарник без runtime-зависимостей;
+- `POST /v1/chat/completions` и `POST /v1/responses`;
+- `GET /v1/models` и alias `GET /models`;
+- SSE с немедленным flush и idle-timeout;
+- восстановление tool arguments из `arguments.delta`, `arguments.done`,
+  `output_item.done` и terminal `response.completed.output`;
+- WAF warmup, безопасное конкурентное cookie-хранилище и retry после WAF block;
+- настраиваемые transport/5xx retries;
+- optional `X-Proxy-Token` authentication;
+- JSON-логи и сквозной `X-Request-ID`;
+- Prometheus endpoint `/metrics`;
+- graceful shutdown, CORS и лимит размера тела;
+- CI и multi-architecture GHCR images (`linux/amd64`, `linux/arm64`).
+
+## Быстрый запуск
+
+### Windows PowerShell
+
+```powershell
+Set-Location 'C:\programming\AgentRouterWAFSpoofing-Proxy'
+Copy-Item .env.example .env
+docker build -t agentrouter-unified-proxy .
+docker run -d --name agentrouter-unified-proxy --restart unless-stopped -p 127.0.0.1:8080:8080 --env-file .env agentrouter-unified-proxy
+```
+
+Проверка:
+
+```powershell
+curl.exe http://127.0.0.1:8080/health
+curl.exe http://127.0.0.1:8080/metrics
+```
+
+PowerShell использует обратный апостроф (backtick) `` ` `` для переноса команд,
+а не `\`, применяемый в Bash.
+
+### Go
 
 ```bash
 cp .env.example .env
 go run .
 ```
 
-Или Docker:
+### Готовый образ GHCR
+
+После публикации release tag (`v1.0.0` и т.п.):
 
 ```bash
-docker build -t agentrouter-unified-proxy .
-docker run --rm -p 8080:8080 --env-file .env agentrouter-unified-proxy
+docker pull ghcr.io/kevji1337/agentrouter-unified-proxy:latest
 ```
 
-### Windows PowerShell
+## Настройка клиента
 
-Сначала перейдите именно в каталог проекта — `Dockerfile` и `.env.example`
-находятся там, а не в домашнем каталоге пользователя:
+Для OpenAI-совместимой IDE:
 
-```powershell
-Set-Location 'C:\programming\AgentRouterWAFSpoofing-Proxy'
-Copy-Item .env.example .env
-docker build -t agentrouter-unified-proxy .
-docker run --rm --name agentrouter-unified-proxy -p 8080:8080 --env-file .env agentrouter-unified-proxy
+```text
+Base URL: http://127.0.0.1:8080/v1
+API Key: ваш ключ AgentRouter
 ```
 
-Для многострочной команды PowerShell использует обратный апостроф (backtick)
-`` ` ``, а не обратный слеш `\`:
+Responses API доступен по адресу:
 
-```powershell
-docker run --rm `
-  --name agentrouter-unified-proxy `
-  -p 8080:8080 `
-  --env-file .env `
-  agentrouter-unified-proxy
+```text
+http://127.0.0.1:8080/v1/responses
 ```
 
-Проверка из второго окна PowerShell:
+Если IDE работает в другом Docker-контейнере, используйте
+`http://host.docker.internal:8080/v1` и публикуйте порт как `-p 8080:8080`, а не
+только на `127.0.0.1`.
 
-```powershell
-curl.exe http://localhost:8080/health
-```
+## Endpoints
 
-API:
-
-- `POST /v1/chat/completions` — преобразуется в Responses API и отправляется на
-  `${UPSTREAM_URL}/v1/responses`; ответ преобразуется обратно, включая SSE.
-- `POST /v1/responses` — прозрачно отправляется на тот же upstream endpoint.
-- `GET /health` — состояние сервиса и наличие WAF-cookie (значение cookie не
-  раскрывается).
-
-`Authorization` передаётся upstream без изменения. Ключ в конфигурации прокси не
-хранится. Максимальный размер JSON-запроса — 20 MiB.
+| Метод | Путь | Назначение |
+|---|---|---|
+| `POST` | `/v1/chat/completions` | Chat → Responses → Chat conversion |
+| `POST` | `/v1/responses` | Прозрачный Responses API proxy |
+| `GET` | `/v1/models`, `/models` | Upstream model discovery |
+| `GET` | `/health` | WAF-cookie и состояние сервиса |
+| `GET` | `/metrics` | Prometheus text format |
 
 ## Конфигурация
 
+Переменные процесса имеют приоритет над `.env`.
+
 | Переменная | По умолчанию | Описание |
 |---|---|---|
-| `UPSTREAM_URL` | `https://agentrouter.org` | Origin upstream-сервиса |
-| `PORT` | `8080` | Порт прослушивания |
+| `UPSTREAM_URL` | `https://agentrouter.org` | Upstream origin без `/v1/responses` |
+| `LISTEN_ADDRESS` | `0.0.0.0` | Адрес внутри процесса/контейнера |
+| `PORT` | `8080` | Порт HTTP-сервера |
 | `SPOOF_PROFILE` | `claude-code` | `claude-code` или `codex` |
+| `PROXY_AUTH_TOKEN` | пусто | Требовать `X-Proxy-Token` на API и metrics |
+| `RESPONSE_HEADER_TIMEOUT` | `5m` | Ожидание upstream response headers |
+| `SSE_IDLE_TIMEOUT` | `10m` | Максимальная пауза между байтами upstream body |
+| `WARMUP_INTERVAL` | `3m` | Период обновления WAF-cookie |
+| `MAX_RETRIES` | `2` | Число transport retries |
+| `RETRY_DELAY` | `1s` | Базовый exponential backoff |
+| `RETRY_ON_5XX` | `false` | Retry HTTP 5xx |
+| `MAX_BODY_BYTES` | `20971520` | Лимит request/converted response |
 
-Переменные процесса имеют приоритет над значениями из `.env`.
+> `RETRY_ON_5XX=true` может повторно отправить уже принятый upstream запрос и
+> привести к двойному биллингу токенов. По умолчанию выключено.
 
-## Пример
+### Защита прокси
 
-```bash
-curl -N http://localhost:8080/v1/chat/completions \
-  -H 'Authorization: Bearer YOUR_AGENTROUTER_KEY' \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"MODEL","messages":[{"role":"user","content":"Hello"}],"stream":true}'
+Укажите в `.env`:
+
+```dotenv
+PROXY_AUTH_TOKEN=replace-with-a-long-random-value
 ```
 
-Используйте сервис только с учётной записью и upstream, к которым у вас есть
+После этого клиент должен добавлять отдельный заголовок:
+
+```text
+X-Proxy-Token: replace-with-a-long-random-value
+```
+
+`Authorization: Bearer ...` остаётся ключом AgentRouter и не используется как
+proxy token. `/health` намеренно доступен без token для Docker HEALTHCHECK.
+
+## Примеры
+
+### Chat Completions
+
+```powershell
+$env:AGENTROUTER_API_KEY = "your-key"
+curl.exe http://127.0.0.1:8080/v1/chat/completions `
+  -H "Authorization: Bearer $env:AGENTROUTER_API_KEY" `
+  -H "Content-Type: application/json" `
+  --data-raw '{"model":"MODEL","messages":[{"role":"user","content":"Hello"}],"stream":true}'
+```
+
+### Models
+
+```powershell
+curl.exe http://127.0.0.1:8080/v1/models `
+  -H "Authorization: Bearer $env:AGENTROUTER_API_KEY"
+```
+
+## Наблюдаемость
+
+Каждый ответ содержит `X-Request-ID`. Входящий корректный `X-Request-ID`
+сохраняется и отправляется upstream. Логи выводятся по одной JSON-записи на
+строку и не содержат API keys, bodies или значения cookie.
+
+Основные Prometheus metrics:
+
+- `agentrouter_proxy_requests_total`;
+- `agentrouter_proxy_errors_total`;
+- `agentrouter_proxy_request_duration_seconds`;
+- `agentrouter_proxy_active_sse`;
+- `agentrouter_proxy_waf_cookie_present`;
+- `agentrouter_proxy_waf_refreshes_total`;
+- `agentrouter_proxy_retries_total`.
+
+## Разработка
+
+```bash
+gofmt -w *.go
+go vet ./...
+go test -race ./...
+docker build -t agentrouter-unified-proxy .
+```
+
+GitHub Actions выполняет format check, vet, race tests и Docker build. Tag вида
+`v1.0.0` публикует multi-arch image в GHCR.
+
+## Лицензия и third-party notices
+
+Проект распространяется по MIT License. Сведения о референсных проектах
+находятся в [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+Используйте сервис только с upstream и учётной записью, к которым у вас есть
 разрешённый доступ.

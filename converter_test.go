@@ -144,3 +144,60 @@ func TestConvertResponsesSSE(t *testing.T) {
 		t.Fatalf("stream flushed only %d times", recorder.flushes)
 	}
 }
+
+func TestToolArgumentsRecoveredFromDoneEvent(t *testing.T) {
+	upstream := strings.Join([]string{
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"read_file"}}`,
+		``,
+		`data: {"type":"response.function_call_arguments.done","output_index":0,"item_id":"fc_1","arguments":"{\"target\":\"C:\\\\Temp\\\\session.md\"}"}`,
+		``,
+		`data: {"type":"response.completed","response":{"status":"completed"}}`,
+		``,
+	}, "\n")
+	recorder := newFlushRecorder()
+	if err := convertResponsesSSE(recorder, strings.NewReader(upstream), requestMeta{Model: "m", Stream: true}); err != nil {
+		t.Fatal(err)
+	}
+	result := recorder.Body.String()
+	if !strings.Contains(result, `"arguments":"{\"target\":\"C:\\\\Temp\\\\session.md\"}"`) {
+		t.Fatalf("done-event arguments were lost:\n%s", result)
+	}
+	if strings.Contains(result, `"arguments":"{}"`) {
+		t.Fatalf("valid arguments were replaced with empty object:\n%s", result)
+	}
+}
+
+func TestToolArgumentsRecoveredFromCompletedResponse(t *testing.T) {
+	upstream := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_tools","model":"m"}}`,
+		``,
+		`data: {"type":"response.completed","response":{"status":"completed","output":[{"id":"fc_2","type":"function_call","call_id":"call_2","name":"read_file","arguments":"{\"target\":\"note.md\"}"}]}}`,
+		``,
+	}, "\n")
+	recorder := newFlushRecorder()
+	if err := convertResponsesSSE(recorder, strings.NewReader(upstream), requestMeta{Model: "m", Stream: true}); err != nil {
+		t.Fatal(err)
+	}
+	result := recorder.Body.String()
+	for _, expected := range []string{`"name":"read_file"`, `"arguments":"{\"target\":\"note.md\"}"`, `"finish_reason":"tool_calls"`} {
+		if !strings.Contains(result, expected) {
+			t.Fatalf("terminal tool recovery missing %s:\n%s", expected, result)
+		}
+	}
+}
+
+func TestEmptyToolArgumentsBecomeJSONObject(t *testing.T) {
+	upstream := strings.Join([]string{
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_3","type":"function_call","call_id":"call_3","name":"no_args"}}`,
+		``,
+		`data: {"type":"response.completed","response":{"status":"completed"}}`,
+		``,
+	}, "\n")
+	recorder := newFlushRecorder()
+	if err := convertResponsesSSE(recorder, strings.NewReader(upstream), requestMeta{Model: "m", Stream: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(recorder.Body.String(), `"arguments":"{}"`) {
+		t.Fatalf("empty arguments did not receive JSON fallback:\n%s", recorder.Body.String())
+	}
+}

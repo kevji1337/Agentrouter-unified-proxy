@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type flushRecorder struct {
@@ -155,5 +156,84 @@ func TestWafBlockRefreshesCookieAndRetriesOnce(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("upstream calls = %d, want 2", calls.Load())
+	}
+}
+
+func TestModelsProxyAndRequestID(t *testing.T) {
+	seenRequestID := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("upstream path = %s", r.URL.Path)
+		}
+		seenRequestID <- r.Header.Get("X-Request-ID")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"m","object":"model"}]}`))
+	}))
+	defer upstream.Close()
+	parsed, _ := url.Parse(upstream.URL)
+	proxy := newProxyServer(config{UpstreamURL: parsed, Profile: "claude-code"})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("X-Request-ID", "test-request-id")
+	recorder := httptest.NewRecorder()
+	proxy.routes().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"id":"m"`) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if recorder.Header().Get("X-Request-ID") != "test-request-id" || <-seenRequestID != "test-request-id" {
+		t.Fatal("request ID was not propagated")
+	}
+}
+
+func TestOptionalProxyAuthentication(t *testing.T) {
+	parsed, _ := url.Parse("http://127.0.0.1:1")
+	proxy := newProxyServer(config{
+		UpstreamURL: parsed, Profile: "claude-code", ProxyAuthToken: "secret-token",
+	})
+
+	unauthorized := httptest.NewRecorder()
+	proxy.routes().ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d", unauthorized.Code)
+	}
+
+	health := httptest.NewRecorder()
+	proxy.routes().ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if health.Code != http.StatusOK {
+		t.Fatalf("health must remain available, status = %d", health.Code)
+	}
+
+	metricsReq := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	metricsReq.Header.Set("X-Proxy-Token", "secret-token")
+	metrics := httptest.NewRecorder()
+	proxy.routes().ServeHTTP(metrics, metricsReq)
+	if metrics.Code != http.StatusOK || !strings.Contains(metrics.Body.String(), "agentrouter_proxy_requests_total") {
+		t.Fatalf("authorized metrics failed: status=%d body=%s", metrics.Code, metrics.Body.String())
+	}
+}
+
+func TestRetryOn5xx(t *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"error":"temporary"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_retry","created_at":1,"status":"completed","model":"m","output":[]}`))
+	}))
+	defer upstream.Close()
+	parsed, _ := url.Parse(upstream.URL)
+	proxy := newProxyServer(config{
+		UpstreamURL: parsed, Profile: "claude-code", RetryOn5xx: true,
+		MaxRetries: 1, RetryDelay: time.Millisecond,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"m","messages":[{"role":"user","content":"hello"}]}`))
+	recorder := httptest.NewRecorder()
+	proxy.routes().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK || calls.Load() != 2 {
+		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, calls.Load(), recorder.Body.String())
 	}
 }
