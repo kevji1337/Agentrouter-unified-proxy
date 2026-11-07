@@ -1,0 +1,5 @@
+.git
+.env
+*.exe
+coverage.out
+README.md
