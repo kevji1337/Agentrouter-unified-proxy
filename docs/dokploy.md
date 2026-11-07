@@ -47,12 +47,23 @@ KEY_STORE_PATH=/data/keys.json
 KEY_SELECTION_MODE=pool-first
 KEY_FAILOVER=true
 KEY_COOLDOWN=5m
+KEY_HEALTH_INTERVAL=5m
 
 FORCE_SEQUENTIAL_TOOLS=true
 STATELESS_RESPONSES=true
 RESPONSE_HEADER_TIMEOUT=5m
 SSE_IDLE_TIMEOUT=10m
 ```
+
+Optional multi-admin RBAC with TOTP can replace or complement `ADMIN_TOKEN`:
+
+```dotenv
+ADMIN_ACCOUNTS_JSON=[{"name":"owner","token":"long-token","role":"admin","totp_secret":"BASE32SECRET"},{"name":"auditor","token":"other-long-token","role":"viewer"}]
+```
+
+`admin` can mutate settings and keys; `viewer` can only read status, usage,
+logs, and encrypted backups. When `totp_secret` is present, the login screen
+also requires a current six-digit authenticator code.
 
 For a public API, also configure:
 

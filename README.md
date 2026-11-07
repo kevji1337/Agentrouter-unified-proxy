@@ -109,6 +109,10 @@ http://127.0.0.1:8080/v1/responses
 | `GET/POST` | `/api/admin/keys` | Список и добавление stored keys |
 | `PATCH/DELETE` | `/api/admin/keys/{id}` | Включение, переименование и удаление |
 | `POST` | `/api/admin/keys/{id}/test` | Проверка ключа через upstream |
+| `PATCH` | `/api/admin/keys/{id}/policy` | Priority, weight, models, limits и pricing |
+| `GET/POST` | `/api/admin/backup` | Encrypted export/import key store |
+| `GET` | `/api/admin/logs` | Live audit/request events |
+| `PATCH` | `/api/admin/settings` | Runtime routing mode |
 
 ## Конфигурация
 
@@ -129,6 +133,8 @@ http://127.0.0.1:8080/v1/responses
 | `KEY_SELECTION_MODE` | `inbound-first` | `inbound-first`, `pool-first` или `pool-only` |
 | `KEY_FAILOVER` | `true` | Переключать stored key после 401/402/429 |
 | `KEY_COOLDOWN` | `5m` | Временно исключать ключ после 401/402/429 |
+| `KEY_HEALTH_INTERVAL` | `5m` | Период background health-check enabled keys |
+| `ADMIN_ACCOUNTS_JSON` | пусто | Multi-admin RBAC (`admin`/`viewer`) и Base32 TOTP |
 | `RESPONSE_HEADER_TIMEOUT` | `5m` | Ожидание upstream response headers |
 | `SSE_IDLE_TIMEOUT` | `10m` | Максимальная пауза между байтами upstream body |
 | `WARMUP_INTERVAL` | `3m` | Период обновления WAF-cookie |
@@ -208,12 +214,22 @@ docker run -d --name agentrouter-unified-proxy --restart unless-stopped `
 - добавлять ключи (enabled/disabled при создании);
 - включать, выключать и удалять;
 - проверять ключ через upstream `/v1/models`;
-- видеть masked credential, usage, failures и last used;
-- контролировать WAF status и routing policy.
+- задавать priority, weight и model allowlist;
+- ограничивать daily requests и monthly budget;
+- учитывать input/output tokens и стоимость по настраиваемым тарифам;
+- видеть masked credential, usage, failures, cooldown и last used;
+- просматривать live audit/request events и usage charts;
+- экспортировать и импортировать encrypted backup;
+- переключать routing policy без перезапуска;
+- контролировать WAF status и background key health.
 
 Полные ключи никогда не возвращаются API панели и не пишутся в логи. На диске
 они хранятся только как AES-GCM ciphertext. Смена `KEY_STORE_SECRET` без
 повторного добавления ключей сделает существующий файл нечитаемым.
+
+Multi-admin конфигурация поддерживает роли `admin` и `viewer`, а также
+опциональный Base32 TOTP secret. UI после token+TOTP login использует 12-часовую
+in-memory session; TOTP-код не хранится и не отправляется повторно.
 
 Режимы выбора:
 
@@ -223,6 +239,10 @@ docker run -d --name agentrouter-unified-proxy --restart unless-stopped `
 
 В pool используется round-robin. При `KEY_FAILOVER=true` ответы 401, 402 и 429
 переключают текущий запрос на следующий enabled key.
+
+Ключи сначала фильтруются по enabled/cooldown/model/limits, затем выбирается
+максимальный priority, а среди ключей одного priority применяется weighted
+round-robin. Тарифы задаются в USD за миллион input/output tokens.
 
 ## Примеры
 

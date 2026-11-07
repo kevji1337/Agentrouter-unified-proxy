@@ -2,12 +2,12 @@ package app
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -27,21 +27,34 @@ func (server *proxyServer) handleAdminPage(w http.ResponseWriter, r *http.Reques
 
 func (server *proxyServer) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	if server.cfg.AdminToken == "" {
+	if len(server.cfg.AdminAccounts) == 0 {
 		writeError(w, http.StatusServiceUnavailable, "admin_disabled", "set ADMIN_TOKEN to enable the admin API")
 		return
 	}
-	provided := r.Header.Get("X-Admin-Token")
-	if len(provided) != len(server.cfg.AdminToken) || subtle.ConstantTimeCompare([]byte(provided), []byte(server.cfg.AdminToken)) != 1 {
-		writeError(w, http.StatusUnauthorized, "admin_auth_required", "missing or invalid X-Admin-Token")
+	if r.URL.Path == "/api/admin/login" {
+		server.handleAdminLogin(w, r)
 		return
 	}
+	account, err := server.authenticateAdmin(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "admin_auth_required", err.Error())
+		return
+	}
+	if r.Method != http.MethodGet && account.Role != "admin" {
+		writeError(w, http.StatusForbidden, "admin_role_required", "administrator role required")
+		return
+	}
+	r = r.WithContext(withAdminAccount(r.Context(), account))
 
 	switch {
 	case r.URL.Path == "/api/admin/status":
 		server.handleAdminStatus(w, r)
 	case r.URL.Path == "/api/admin/settings":
 		server.handleAdminSettings(w, r)
+	case r.URL.Path == "/api/admin/backup":
+		server.handleAdminBackup(w, r)
+	case r.URL.Path == "/api/admin/logs":
+		server.handleAdminLogs(w, r)
 	case r.URL.Path == "/api/admin/keys":
 		server.handleAdminKeys(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/admin/keys/"):
@@ -51,19 +64,51 @@ func (server *proxyServer) handleAdminAPI(w http.ResponseWriter, r *http.Request
 	}
 }
 
+func (server *proxyServer) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use POST")
+		return
+	}
+	var input struct {
+		Token string `json:"token"`
+		TOTP  string `json:"totp"`
+	}
+	if err := decodeAdminJSON(w, r, &input); err != nil {
+		return
+	}
+	probe := r.Clone(r.Context())
+	probe.Header = r.Header.Clone()
+	probe.Header.Set("X-Admin-Token", input.Token)
+	probe.Header.Set("X-Admin-TOTP", input.TOTP)
+	account, err := server.authenticateAdmin(probe)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "admin_auth_required", err.Error())
+		return
+	}
+	session, expires := server.createAdminSession(account)
+	logEvent("info", "admin_login", map[string]any{"admin": account.Name, "role": account.Role})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session": session, "expires_at": expires, "admin": map[string]any{"name": account.Name, "role": account.Role},
+	})
+}
+
 func (server *proxyServer) handleAdminStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")
 		return
 	}
 	present, _, updated, _ := server.cookies.status()
+	lastKeyHealth, _ := server.lastKeyHealth.Load().(time.Time)
+	account := adminAccountFromContext(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "ok", "upstream": server.cfg.UpstreamURL.String(), "profile": server.cfg.Profile,
 		"waf_cookie": present, "waf_cookie_updated_at": optionalTime(updated),
 		"selection_mode": server.currentKeySelectionMode(), "key_failover": server.cfg.KeyFailover,
-		"key_cooldown": server.cfg.KeyCooldown.String(),
-		"store":        server.keys.status(), "force_sequential_tools": server.cfg.ForceSequentialTools,
+		"key_cooldown":        server.cfg.KeyCooldown.String(),
+		"key_health_interval": server.cfg.KeyHealthInterval.String(), "last_key_health_at": optionalTime(lastKeyHealth),
+		"store": server.keys.status(), "force_sequential_tools": server.cfg.ForceSequentialTools,
 		"stateless_responses": server.cfg.StatelessResponses,
+		"admin":               map[string]any{"name": account.Name, "role": account.Role},
 	})
 }
 
@@ -83,6 +128,10 @@ func (server *proxyServer) handleAdminSettings(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "invalid_selection_mode", "use inbound-first, pool-first, or pool-only")
 		return
 	}
+	if err := server.keys.saveSelectionMode(mode); err != nil {
+		writeError(w, http.StatusInternalServerError, "settings_persist_failed", err.Error())
+		return
+	}
 	server.routingMode.Store(mode)
 	logEvent("info", "admin_routing_mode_changed", map[string]any{"selection_mode": mode})
 	writeJSON(w, http.StatusOK, map[string]any{"selection_mode": mode})
@@ -99,9 +148,10 @@ func (server *proxyServer) handleAdminKeys(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusOK, map[string]any{"data": keys})
 	case http.MethodPost:
 		var input struct {
-			Name    string `json:"name"`
-			Key     string `json:"key"`
-			Enabled *bool  `json:"enabled"`
+			Name    string       `json:"name"`
+			Key     string       `json:"key"`
+			Enabled *bool        `json:"enabled"`
+			Policy  apiKeyPolicy `json:"policy"`
 		}
 		if err := decodeAdminJSON(w, r, &input); err != nil {
 			return
@@ -110,7 +160,7 @@ func (server *proxyServer) handleAdminKeys(w http.ResponseWriter, r *http.Reques
 		if input.Enabled != nil {
 			enabled = *input.Enabled
 		}
-		view, err := server.keys.add(input.Name, input.Key, enabled)
+		view, err := server.keys.addWithPolicy(input.Name, input.Key, enabled, input.Policy)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_key", err.Error())
 			return
@@ -131,11 +181,32 @@ func (server *proxyServer) handleAdminKey(w http.ResponseWriter, r *http.Request
 	}
 	id := parts[0]
 	if len(parts) == 2 {
-		if parts[1] != "test" || r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use POST on /test")
-			return
+		switch parts[1] {
+		case "test":
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use POST on /test")
+				return
+			}
+			server.handleAdminKeyTest(w, r, id)
+		case "policy":
+			if r.Method != http.MethodPatch {
+				writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use PATCH on /policy")
+				return
+			}
+			var policy apiKeyPolicy
+			if err := decodeAdminJSON(w, r, &policy); err != nil {
+				return
+			}
+			view, err := server.keys.updatePolicy(id, policy)
+			if err != nil {
+				writeAdminStoreError(w, err)
+				return
+			}
+			logEvent("info", "admin_key_policy_updated", map[string]any{"key_id": id})
+			writeJSON(w, http.StatusOK, view)
+		default:
+			writeError(w, http.StatusNotFound, "not_found", "key action not found")
 		}
-		server.handleAdminKeyTest(w, r, id)
 		return
 	}
 
@@ -165,6 +236,46 @@ func (server *proxyServer) handleAdminKey(w http.ResponseWriter, r *http.Request
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use PATCH or DELETE")
 	}
+}
+
+func (server *proxyServer) handleAdminBackup(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		raw, err := server.keys.exportBackup()
+		if err != nil {
+			writeAdminStoreError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", `attachment; filename="agentrouter-keys-backup.json"`)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(raw)
+	case http.MethodPost:
+		defer r.Body.Close()
+		raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 10<<20))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_backup", err.Error())
+			return
+		}
+		if err := server.keys.importBackup(raw); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_backup", err.Error())
+			return
+		}
+		logEvent("info", "admin_backup_imported", nil)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET or POST")
+	}
+}
+
+func (server *proxyServer) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")
+		return
+	}
+	after, _ := strconv.ParseUint(r.URL.Query().Get("after"), 10, 64)
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	writeJSON(w, http.StatusOK, map[string]any{"data": adminLogRing.recent(after, limit)})
 }
 
 func (server *proxyServer) handleAdminKeyTest(w http.ResponseWriter, r *http.Request, id string) {

@@ -42,11 +42,13 @@ type config struct {
 	ForceSequentialTools  bool
 	StatelessResponses    bool
 	AdminToken            string
+	AdminAccounts         []adminAccount
 	KeyStorePath          string
 	KeyStoreSecret        string
 	KeySelectionMode      string
 	KeyFailover           bool
 	KeyCooldown           time.Duration
+	KeyHealthInterval     time.Duration
 }
 
 func loadConfig() (config, error) {
@@ -120,7 +122,15 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	keyHealthInterval, err := envDuration("KEY_HEALTH_INTERVAL", 5*time.Minute)
+	if err != nil {
+		return config{}, err
+	}
 	adminToken := strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
+	adminAccounts, err := parseAdminAccounts(os.Getenv("ADMIN_ACCOUNTS_JSON"), adminToken)
+	if err != nil {
+		return config{}, err
+	}
 	keyStoreSecret := strings.TrimSpace(os.Getenv("KEY_STORE_SECRET"))
 	if keyStoreSecret == "" {
 		keyStoreSecret = adminToken
@@ -132,9 +142,10 @@ func loadConfig() (config, error) {
 		WarmupInterval: warmupInterval, RetryDelay: retryDelay, MaxRetries: maxRetries,
 		RetryOn5xx: retryOn5xx, MaxBodyBytes: maxBodyBytes, ForceSequentialTools: forceSequentialTools,
 		StatelessResponses: statelessResponses,
-		AdminToken:         adminToken, KeyStorePath: envDefault("KEY_STORE_PATH", "/data/keys.json"),
+		AdminToken:         adminToken, AdminAccounts: adminAccounts, KeyStorePath: envDefault("KEY_STORE_PATH", "/data/keys.json"),
 		KeyStoreSecret: keyStoreSecret, KeySelectionMode: keySelectionMode, KeyFailover: keyFailover,
-		KeyCooldown: keyCooldown,
+		KeyCooldown:       keyCooldown,
+		KeyHealthInterval: keyHealthInterval,
 	}, nil
 }
 
@@ -379,12 +390,15 @@ func (store *cookieStore) warmup(ctx context.Context, upstream *url.URL) bool {
 }
 
 type proxyServer struct {
-	cfg         config
-	cookies     *cookieStore
-	client      *http.Client
-	metrics     *proxyMetrics
-	keys        *apiKeyStore
-	routingMode atomic.Value
+	cfg           config
+	cookies       *cookieStore
+	client        *http.Client
+	metrics       *proxyMetrics
+	keys          *apiKeyStore
+	routingMode   atomic.Value
+	lastKeyHealth atomic.Value
+	adminMu       sync.Mutex
+	adminSessions map[string]adminSession
 }
 
 func newProxyServer(cfg config) *proxyServer {
@@ -399,6 +413,9 @@ func newProxyServer(cfg config) *proxyServer {
 	}
 	if cfg.KeySelectionMode == "" {
 		cfg.KeySelectionMode = "inbound-first"
+	}
+	if len(cfg.AdminAccounts) == 0 && cfg.AdminToken != "" {
+		cfg.AdminAccounts = []adminAccount{{Name: "owner", Token: cfg.AdminToken, Role: "admin"}}
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConns = 100
@@ -415,8 +432,13 @@ func newProxyServer(cfg config) *proxyServer {
 				return http.ErrUseLastResponse
 			},
 		},
+		adminSessions: make(map[string]adminSession),
 	}
 	server.routingMode.Store(cfg.KeySelectionMode)
+	if savedMode := server.keys.savedSelectionMode(); validKeySelectionMode(savedMode) {
+		server.routingMode.Store(savedMode)
+	}
+	server.lastKeyHealth.Store(time.Time{})
 	return server
 }
 
@@ -426,6 +448,40 @@ func (server *proxyServer) currentKeySelectionMode() string {
 		return server.cfg.KeySelectionMode
 	}
 	return mode
+}
+
+func (server *proxyServer) keyHealthLoop(ctx context.Context) {
+	if server.cfg.KeyHealthInterval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(server.cfg.KeyHealthInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			server.probeAllKeys(ctx)
+		}
+	}
+}
+
+func (server *proxyServer) probeAllKeys(ctx context.Context) {
+	keys, err := server.keys.enabledForProbe()
+	if err != nil {
+		logEvent("error", "key_health_load_failed", map[string]any{"error": err.Error()})
+		return
+	}
+	for _, key := range keys {
+		if ctx.Err() != nil {
+			return
+		}
+		status, message := server.probeAPIKey(ctx, key.Key)
+		server.keys.recordResult(key.ID, status, message, server.cfg.KeyCooldown)
+	}
+	now := time.Now().UTC()
+	server.lastKeyHealth.Store(now)
+	logEvent("info", "key_health_completed", map[string]any{"checked": len(keys)})
 }
 
 func validKeySelectionMode(mode string) bool {
@@ -752,7 +808,8 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 	wafRetried := false
 	resourceRetried := false
 	excludedKeys := make(map[string]bool)
-	authHeader, selectedKey, err := server.selectAuthorization(inbound.Get("Authorization"), excludedKeys)
+	model := modelFromRequestBody(body)
+	authHeader, selectedKey, err := server.selectAuthorization(inbound.Get("Authorization"), excludedKeys, model)
 	if err != nil {
 		return nil, err
 	}
@@ -861,7 +918,7 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 			failedKeyID := selectedKey.ID
 			server.keys.recordResult(failedKeyID, resp.StatusCode, http.StatusText(resp.StatusCode), server.cfg.KeyCooldown)
 			excludedKeys[failedKeyID] = true
-			nextAuth, nextKey, selectErr := server.selectPoolAuthorization(excludedKeys)
+			nextAuth, nextKey, selectErr := server.selectPoolAuthorization(excludedKeys, model)
 			if selectErr == nil {
 				authHeader, selectedKey = nextAuth, nextKey
 				server.metrics.retries.Add(1)
@@ -890,17 +947,23 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 		}
 		if selectedKey != nil {
 			server.keys.recordResult(selectedKey.ID, resp.StatusCode, http.StatusText(resp.StatusCode), server.cfg.KeyCooldown)
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				keyID := selectedKey.ID
+				resp.Body = newUsageTrackingBody(resp.Body, func(input, output uint64) {
+					server.keys.recordUsage(keyID, input, output)
+				})
+			}
 		}
 		return resp, nil
 	}
 }
 
-func (server *proxyServer) selectAuthorization(inbound string, excluded map[string]bool) (string, *selectedAPIKey, error) {
+func (server *proxyServer) selectAuthorization(inbound string, excluded map[string]bool, model string) (string, *selectedAPIKey, error) {
 	switch server.currentKeySelectionMode() {
 	case "pool-only":
-		return server.selectPoolAuthorization(excluded)
+		return server.selectPoolAuthorization(excluded, model)
 	case "pool-first":
-		auth, key, err := server.selectPoolAuthorization(excluded)
+		auth, key, err := server.selectPoolAuthorization(excluded, model)
 		if err == nil {
 			return auth, key, nil
 		}
@@ -912,7 +975,7 @@ func (server *proxyServer) selectAuthorization(inbound string, excluded map[stri
 		if inbound != "" {
 			return inbound, nil, nil
 		}
-		auth, key, err := server.selectPoolAuthorization(excluded)
+		auth, key, err := server.selectPoolAuthorization(excluded, model)
 		if errors.Is(err, errNoEnabledAPIKeys) {
 			return "", nil, nil
 		}
@@ -920,12 +983,23 @@ func (server *proxyServer) selectAuthorization(inbound string, excluded map[stri
 	}
 }
 
-func (server *proxyServer) selectPoolAuthorization(excluded map[string]bool) (string, *selectedAPIKey, error) {
-	key, err := server.keys.selectNext(excluded)
+func (server *proxyServer) selectPoolAuthorization(excluded map[string]bool, model string) (string, *selectedAPIKey, error) {
+	key, err := server.keys.selectNextForModel(excluded, model)
 	if err != nil {
 		return "", nil, err
 	}
 	return "Bearer " + key.Key, key, nil
+}
+
+func modelFromRequestBody(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var request struct {
+		Model string `json:"model"`
+	}
+	_ = json.Unmarshal(body, &request)
+	return request.Model
 }
 
 func sleepContext(ctx context.Context, duration time.Duration) bool {
@@ -1041,6 +1115,7 @@ func Run() {
 			}
 		}
 	}()
+	go proxy.keyHealthLoop(rootCtx)
 
 	httpServer := &http.Server{
 		Addr:              net.JoinHostPort(cfg.ListenAddress, strconv.Itoa(cfg.Port)),

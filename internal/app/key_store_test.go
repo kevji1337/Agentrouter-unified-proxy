@@ -65,13 +65,16 @@ func TestAPIKeyStoreEncryptsAndManagesKeys(t *testing.T) {
 	if err := store.delete(second.ID); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.saveSelectionMode("pool-only"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.selectNext(nil); !errors.Is(err, errNoEnabledAPIKeys) {
 		t.Fatalf("selection after delete error = %v", err)
 	}
 
 	reloaded := newAPIKeyStore(path, "test-encryption-secret")
 	views, err := reloaded.list()
-	if err != nil || len(views) != 1 || views[0].ID != first.ID || views[0].Enabled {
+	if err != nil || len(views) != 1 || views[0].ID != first.ID || views[0].Enabled || reloaded.savedSelectionMode() != "pool-only" {
 		t.Fatalf("reloaded views = %#v err=%v", views, err)
 	}
 	wrongSecret := newAPIKeyStore(path, "wrong-secret")
@@ -170,5 +173,97 @@ func TestPoolOnlyRoutingAndKeyFailover(t *testing.T) {
 	}
 	if first, second := <-seen, <-seen; first != "Bearer sk-failing-key" || second != "Bearer sk-working-key" {
 		t.Fatalf("authorization sequence = %q, %q", first, second)
+	}
+}
+
+func TestKeyPolicyPriorityModelLimitsAndBackup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keys.json")
+	store := newAPIKeyStore(path, "policy-secret")
+	low, err := store.addWithPolicy("Low", "sk-low-policy-key", true, apiKeyPolicy{Priority: 1, Weight: 1, Models: []string{"model-a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	high, err := store.addWithPolicy("High", "sk-high-policy-key", true, apiKeyPolicy{Priority: 10, Weight: 2, Models: []string{"model-b"}, DailyRequestLimit: 1, MonthlyBudgetUSD: 1, InputCostPerMillion: 2, OutputCostPerMillion: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := store.selectNextForModel(nil, "model-b")
+	if err != nil || selected.ID != high.ID {
+		t.Fatalf("high-priority model key = %#v err=%v", selected, err)
+	}
+	// Daily limit removes the high-priority key; model-a can still use Low.
+	selected, err = store.selectNextForModel(nil, "model-a")
+	if err != nil || selected.ID != low.ID {
+		t.Fatalf("model allowlist selection = %#v err=%v", selected, err)
+	}
+	if _, err := store.selectNextForModel(nil, "model-b"); !errors.Is(err, errNoEnabledAPIKeys) {
+		t.Fatalf("daily request limit was not enforced: %v", err)
+	}
+	store.recordUsage(high.ID, 1000, 500)
+	views, _ := store.list()
+	var highView apiKeyView
+	for _, view := range views {
+		if view.ID == high.ID {
+			highView = view
+		}
+	}
+	if highView.InputTokens != 1000 || highView.OutputTokens != 500 || highView.MonthlySpendUSD <= 0 {
+		t.Fatalf("usage/cost accounting failed: %#v", highView)
+	}
+
+	backup, err := store.exportBackup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := newAPIKeyStore(filepath.Join(t.TempDir(), "restored.json"), "policy-secret")
+	if err := restored.importBackup(backup); err != nil {
+		t.Fatal(err)
+	}
+	restoredViews, _ := restored.list()
+	if len(restoredViews) != 2 {
+		t.Fatalf("restored key count = %d", len(restoredViews))
+	}
+	wrongSecret := newAPIKeyStore(filepath.Join(t.TempDir(), "wrong.json"), "wrong-secret")
+	if err := wrongSecret.importBackup(backup); err == nil {
+		t.Fatal("backup imported with the wrong encryption secret")
+	}
+}
+
+func TestTOTPAndViewerRole(t *testing.T) {
+	secret := "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+	if !validTOTP(secret, "287082", time.Unix(59, 0)) {
+		t.Fatal("valid RFC TOTP code was rejected")
+	}
+	accounts, err := parseAdminAccounts(`[{"name":"auditor","token":"viewer-token-123456","role":"viewer","totp_secret":"`+secret+`"}]`, "")
+	if err != nil || len(accounts) != 1 || accounts[0].Role != "viewer" {
+		t.Fatalf("accounts=%#v err=%v", accounts, err)
+	}
+}
+
+func TestAdminSessionEnforcesViewerRole(t *testing.T) {
+	parsed, _ := url.Parse("http://127.0.0.1:1")
+	proxy := newProxyServer(config{
+		UpstreamURL: parsed, Profile: "claude-code",
+		AdminAccounts:  []adminAccount{{Name: "auditor", Token: "viewer-token-123456", Role: "viewer"}},
+		KeyStoreSecret: "store-secret", KeyStorePath: filepath.Join(t.TempDir(), "keys.json"),
+	})
+	login := httptest.NewRequest(http.MethodPost, "/api/admin/login", strings.NewReader(`{"token":"viewer-token-123456","totp":""}`))
+	loginRecorder := httptest.NewRecorder()
+	proxy.routes().ServeHTTP(loginRecorder, login)
+	if loginRecorder.Code != http.StatusOK {
+		t.Fatalf("login status=%d body=%s", loginRecorder.Code, loginRecorder.Body.String())
+	}
+	var loginResponse struct {
+		Session string `json:"session"`
+	}
+	if err := json.Unmarshal(loginRecorder.Body.Bytes(), &loginResponse); err != nil || loginResponse.Session == "" {
+		t.Fatalf("login response=%s err=%v", loginRecorder.Body.String(), err)
+	}
+	mutation := httptest.NewRequest(http.MethodPatch, "/api/admin/settings", strings.NewReader(`{"selection_mode":"pool-only"}`))
+	mutation.Header.Set("X-Admin-Session", loginResponse.Session)
+	mutationRecorder := httptest.NewRecorder()
+	proxy.routes().ServeHTTP(mutationRecorder, mutation)
+	if mutationRecorder.Code != http.StatusForbidden {
+		t.Fatalf("viewer mutation status=%d body=%s", mutationRecorder.Code, mutationRecorder.Body.String())
 	}
 }

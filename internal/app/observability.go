@@ -9,11 +9,20 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
 
 type requestIDContextKey struct{}
+
+type logRing struct {
+	mu    sync.Mutex
+	next  uint64
+	items []map[string]any
+}
+
+var adminLogRing = &logRing{items: make([]map[string]any, 0, 500)}
 
 func requestIDFromContext(ctx context.Context) string {
 	value, _ := ctx.Value(requestIDContextKey{}).(string)
@@ -49,12 +58,50 @@ func logEvent(level, message string, fields map[string]any) {
 	for key, value := range fields {
 		record[key] = value
 	}
+	adminLogRing.add(record)
 	encoded, err := json.Marshal(record)
 	if err != nil {
 		log.Printf(`{"level":"error","message":"failed to encode log record"}`)
 		return
 	}
 	log.Print(string(encoded))
+}
+
+func (ring *logRing) add(record map[string]any) {
+	ring.mu.Lock()
+	defer ring.mu.Unlock()
+	ring.next++
+	copyRecord := make(map[string]any, len(record)+1)
+	for key, value := range record {
+		copyRecord[key] = value
+	}
+	copyRecord["seq"] = ring.next
+	if len(ring.items) >= 500 {
+		copy(ring.items, ring.items[1:])
+		ring.items[len(ring.items)-1] = copyRecord
+	} else {
+		ring.items = append(ring.items, copyRecord)
+	}
+}
+
+func (ring *logRing) recent(after uint64, limit int) []map[string]any {
+	ring.mu.Lock()
+	defer ring.mu.Unlock()
+	if limit < 1 || limit > 200 {
+		limit = 100
+	}
+	result := make([]map[string]any, 0, limit)
+	for _, item := range ring.items {
+		seq, _ := item["seq"].(uint64)
+		if seq <= after {
+			continue
+		}
+		result = append(result, item)
+		if len(result) >= limit {
+			break
+		}
+	}
+	return result
 }
 
 type proxyMetrics struct {
@@ -125,5 +172,10 @@ func (metrics *proxyMetrics) handler(cookies *cookieStore, keys *apiKeyStore) ht
 		_, _ = fmt.Fprintf(w, "# TYPE agentrouter_proxy_api_keys gauge\n")
 		_, _ = fmt.Fprintf(w, "agentrouter_proxy_api_keys{state=\"enabled\"} %d\n", keyStatus.Enabled)
 		_, _ = fmt.Fprintf(w, "agentrouter_proxy_api_keys{state=\"total\"} %d\n", keyStatus.Total)
+		_, _ = fmt.Fprintf(w, "# TYPE agentrouter_proxy_tokens_total counter\n")
+		_, _ = fmt.Fprintf(w, "agentrouter_proxy_tokens_total{direction=\"input\"} %d\n", keyStatus.InputTokens)
+		_, _ = fmt.Fprintf(w, "agentrouter_proxy_tokens_total{direction=\"output\"} %d\n", keyStatus.OutputTokens)
+		_, _ = fmt.Fprintf(w, "# TYPE agentrouter_proxy_monthly_spend_usd gauge\n")
+		_, _ = fmt.Fprintf(w, "agentrouter_proxy_monthly_spend_usd %.6f\n", keyStatus.MonthlySpendUSD)
 	}
 }

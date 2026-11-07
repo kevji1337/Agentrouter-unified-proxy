@@ -22,39 +22,77 @@ import (
 var errNoEnabledAPIKeys = errors.New("no enabled API keys in the key pool")
 
 type persistedKeyFile struct {
-	Version int               `json:"version"`
-	Keys    []persistedAPIKey `json:"keys"`
+	Version  int                  `json:"version"`
+	Keys     []persistedAPIKey    `json:"keys"`
+	Settings persistedKeySettings `json:"settings,omitempty"`
+}
+
+type persistedKeySettings struct {
+	SelectionMode string `json:"selection_mode,omitempty"`
 }
 
 type persistedAPIKey struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	Enabled    bool      `json:"enabled"`
-	Mask       string    `json:"mask"`
-	Nonce      string    `json:"nonce"`
-	Ciphertext string    `json:"ciphertext"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
-
-	Uses          uint64    `json:"-"`
-	Failures      uint64    `json:"-"`
-	LastUsed      time.Time `json:"-"`
-	LastError     string    `json:"-"`
-	CooldownUntil time.Time `json:"-"`
+	ID                   string    `json:"id"`
+	Name                 string    `json:"name"`
+	Enabled              bool      `json:"enabled"`
+	Mask                 string    `json:"mask"`
+	Nonce                string    `json:"nonce"`
+	Ciphertext           string    `json:"ciphertext"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+	Priority             int       `json:"priority,omitempty"`
+	Weight               int       `json:"weight,omitempty"`
+	Models               []string  `json:"models,omitempty"`
+	DailyRequestLimit    int       `json:"daily_request_limit,omitempty"`
+	MonthlyBudgetUSD     float64   `json:"monthly_budget_usd,omitempty"`
+	InputCostPerMillion  float64   `json:"input_cost_per_million,omitempty"`
+	OutputCostPerMillion float64   `json:"output_cost_per_million,omitempty"`
+	Uses                 uint64    `json:"uses,omitempty"`
+	Failures             uint64    `json:"failures,omitempty"`
+	LastUsed             time.Time `json:"last_used,omitempty"`
+	LastError            string    `json:"last_error,omitempty"`
+	CooldownUntil        time.Time `json:"cooldown_until,omitempty"`
+	UsageDay             string    `json:"usage_day,omitempty"`
+	DailyRequests        int       `json:"daily_requests,omitempty"`
+	UsageMonth           string    `json:"usage_month,omitempty"`
+	MonthlySpendUSD      float64   `json:"monthly_spend_usd,omitempty"`
+	InputTokens          uint64    `json:"input_tokens,omitempty"`
+	OutputTokens         uint64    `json:"output_tokens,omitempty"`
 }
 
 type apiKeyView struct {
-	ID            string     `json:"id"`
-	Name          string     `json:"name"`
-	Enabled       bool       `json:"enabled"`
-	Mask          string     `json:"mask"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
-	Uses          uint64     `json:"uses"`
-	Failures      uint64     `json:"failures"`
-	LastUsed      *time.Time `json:"last_used,omitempty"`
-	LastError     string     `json:"last_error,omitempty"`
-	CooldownUntil *time.Time `json:"cooldown_until,omitempty"`
+	ID                   string     `json:"id"`
+	Name                 string     `json:"name"`
+	Enabled              bool       `json:"enabled"`
+	Mask                 string     `json:"mask"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+	Uses                 uint64     `json:"uses"`
+	Failures             uint64     `json:"failures"`
+	LastUsed             *time.Time `json:"last_used,omitempty"`
+	LastError            string     `json:"last_error,omitempty"`
+	CooldownUntil        *time.Time `json:"cooldown_until,omitempty"`
+	Priority             int        `json:"priority"`
+	Weight               int        `json:"weight"`
+	Models               []string   `json:"models,omitempty"`
+	DailyRequestLimit    int        `json:"daily_request_limit"`
+	DailyRequests        int        `json:"daily_requests"`
+	MonthlyBudgetUSD     float64    `json:"monthly_budget_usd"`
+	MonthlySpendUSD      float64    `json:"monthly_spend_usd"`
+	InputCostPerMillion  float64    `json:"input_cost_per_million"`
+	OutputCostPerMillion float64    `json:"output_cost_per_million"`
+	InputTokens          uint64     `json:"input_tokens"`
+	OutputTokens         uint64     `json:"output_tokens"`
+}
+
+type apiKeyPolicy struct {
+	Priority             int      `json:"priority"`
+	Weight               int      `json:"weight"`
+	Models               []string `json:"models"`
+	DailyRequestLimit    int      `json:"daily_request_limit"`
+	MonthlyBudgetUSD     float64  `json:"monthly_budget_usd"`
+	InputCostPerMillion  float64  `json:"input_cost_per_million"`
+	OutputCostPerMillion float64  `json:"output_cost_per_million"`
 }
 
 type selectedAPIKey struct {
@@ -68,17 +106,21 @@ type apiKeyStore struct {
 	path     string
 	aead     cipher.AEAD
 	keys     []persistedAPIKey
-	next     int
+	next     uint64
 	loadErr  error
 	readOnly bool
+	settings persistedKeySettings
 }
 
 type apiKeyStoreStatus struct {
-	Ready     bool   `json:"ready"`
-	Error     string `json:"error,omitempty"`
-	Total     int    `json:"total"`
-	Enabled   int    `json:"enabled"`
-	Available int    `json:"available"`
+	Ready           bool    `json:"ready"`
+	Error           string  `json:"error,omitempty"`
+	Total           int     `json:"total"`
+	Enabled         int     `json:"enabled"`
+	Available       int     `json:"available"`
+	InputTokens     uint64  `json:"input_tokens"`
+	OutputTokens    uint64  `json:"output_tokens"`
+	MonthlySpendUSD float64 `json:"monthly_spend_usd"`
 }
 
 func newAPIKeyStore(path, secret string) *apiKeyStore {
@@ -116,15 +158,17 @@ func (store *apiKeyStore) load() error {
 	if err := json.Unmarshal(raw, &file); err != nil {
 		return fmt.Errorf("decode key store: %w", err)
 	}
-	if file.Version != 1 {
+	if file.Version != 1 && file.Version != 2 {
 		return fmt.Errorf("unsupported key store version %d", file.Version)
 	}
 	for i := range file.Keys {
+		normalizeKeyPolicy(&file.Keys[i])
 		if _, err := store.decrypt(file.Keys[i]); err != nil {
 			return fmt.Errorf("decrypt key %q: check KEY_STORE_SECRET: %w", file.Keys[i].Name, err)
 		}
 	}
 	store.keys = file.Keys
+	store.settings = file.Settings
 	return nil
 }
 
@@ -135,7 +179,7 @@ func (store *apiKeyStore) saveLocked() error {
 	if err := os.MkdirAll(filepath.Dir(store.path), 0o700); err != nil {
 		return fmt.Errorf("create key store directory: %w", err)
 	}
-	file := persistedKeyFile{Version: 1, Keys: store.keys}
+	file := persistedKeyFile{Version: 2, Keys: store.keys, Settings: store.settings}
 	raw, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return err
@@ -200,6 +244,10 @@ func (store *apiKeyStore) ready() error {
 }
 
 func (store *apiKeyStore) add(name, key string, enabled bool) (apiKeyView, error) {
+	return store.addWithPolicy(name, key, enabled, apiKeyPolicy{Weight: 1})
+}
+
+func (store *apiKeyStore) addWithPolicy(name, key string, enabled bool, policy apiKeyPolicy) (apiKeyView, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := store.ready(); err != nil {
@@ -225,7 +273,14 @@ func (store *apiKeyStore) add(name, key string, enabled bool) (apiKeyView, error
 	record := persistedAPIKey{
 		ID: randomKeyID(), Name: name, Enabled: enabled, Mask: maskAPIKey(key),
 		Nonce: nonce, Ciphertext: ciphertext, CreatedAt: now, UpdatedAt: now,
+		Priority: policy.Priority, Weight: policy.Weight, Models: normalizeModels(policy.Models),
+		DailyRequestLimit: policy.DailyRequestLimit, MonthlyBudgetUSD: policy.MonthlyBudgetUSD,
+		InputCostPerMillion: policy.InputCostPerMillion, OutputCostPerMillion: policy.OutputCostPerMillion,
 	}
+	if err := validateKeyPolicy(record); err != nil {
+		return apiKeyView{}, err
+	}
+	normalizeKeyPolicy(&record)
 	store.keys = append(store.keys, record)
 	if err := store.saveLocked(); err != nil {
 		store.keys = store.keys[:len(store.keys)-1]
@@ -257,13 +312,19 @@ func (store *apiKeyStore) status() apiKeyStoreStatus {
 	} else if store.readOnly || store.aead == nil {
 		status.Error = "key store is locked"
 	}
-	for _, key := range store.keys {
+	now := time.Now().UTC()
+	for i := range store.keys {
+		key := &store.keys[i]
+		resetUsagePeriods(key, now)
 		if key.Enabled {
 			status.Enabled++
-			if key.CooldownUntil.IsZero() || time.Now().After(key.CooldownUntil) {
+			if keyAvailable(*key, nil, "", now) {
 				status.Available++
 			}
 		}
+		status.InputTokens += key.InputTokens
+		status.OutputTokens += key.OutputTokens
+		status.MonthlySpendUSD += key.MonthlySpendUSD
 	}
 	return status
 }
@@ -302,6 +363,37 @@ func (store *apiKeyStore) update(id string, name *string, enabled *bool) (apiKey
 	return keyView(store.keys[index]), nil
 }
 
+func (store *apiKeyStore) updatePolicy(id string, policy apiKeyPolicy) (apiKeyView, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ready(); err != nil {
+		return apiKeyView{}, err
+	}
+	index := store.indexLocked(id)
+	if index < 0 {
+		return apiKeyView{}, os.ErrNotExist
+	}
+	old := store.keys[index]
+	store.keys[index].Priority = policy.Priority
+	store.keys[index].Weight = policy.Weight
+	store.keys[index].Models = normalizeModels(policy.Models)
+	store.keys[index].DailyRequestLimit = policy.DailyRequestLimit
+	store.keys[index].MonthlyBudgetUSD = policy.MonthlyBudgetUSD
+	store.keys[index].InputCostPerMillion = policy.InputCostPerMillion
+	store.keys[index].OutputCostPerMillion = policy.OutputCostPerMillion
+	if err := validateKeyPolicy(store.keys[index]); err != nil {
+		store.keys[index] = old
+		return apiKeyView{}, err
+	}
+	normalizeKeyPolicy(&store.keys[index])
+	store.keys[index].UpdatedAt = time.Now().UTC()
+	if err := store.saveLocked(); err != nil {
+		store.keys[index] = old
+		return apiKeyView{}, err
+	}
+	return keyView(store.keys[index]), nil
+}
+
 func (store *apiKeyStore) delete(id string) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -314,7 +406,7 @@ func (store *apiKeyStore) delete(id string) error {
 	}
 	old := append([]persistedAPIKey(nil), store.keys...)
 	store.keys = append(store.keys[:index], store.keys[index+1:]...)
-	if store.next >= len(store.keys) {
+	if store.next >= uint64(len(store.keys)) {
 		store.next = 0
 	}
 	if err := store.saveLocked(); err != nil {
@@ -325,6 +417,10 @@ func (store *apiKeyStore) delete(id string) error {
 }
 
 func (store *apiKeyStore) selectNext(excluded map[string]bool) (*selectedAPIKey, error) {
+	return store.selectNextForModel(excluded, "")
+}
+
+func (store *apiKeyStore) selectNextForModel(excluded map[string]bool, model string) (*selectedAPIKey, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.loadErr != nil {
@@ -333,22 +429,52 @@ func (store *apiKeyStore) selectNext(excluded map[string]bool) (*selectedAPIKey,
 	if len(store.keys) == 0 {
 		return nil, errNoEnabledAPIKeys
 	}
-	for offset := 0; offset < len(store.keys); offset++ {
-		index := (store.next + offset) % len(store.keys)
+	now := time.Now().UTC()
+	eligible := make([]int, 0, len(store.keys))
+	highestPriority := -1 << 30
+	for index := range store.keys {
 		record := &store.keys[index]
-		if !record.Enabled || excluded[record.ID] || (!record.CooldownUntil.IsZero() && time.Now().Before(record.CooldownUntil)) {
+		resetUsagePeriods(record, now)
+		if !keyAvailable(*record, excluded, model, now) {
 			continue
 		}
-		plain, err := store.decrypt(*record)
-		if err != nil {
-			return nil, err
+		if record.Priority > highestPriority {
+			highestPriority = record.Priority
+			eligible = eligible[:0]
 		}
-		store.next = (index + 1) % len(store.keys)
-		record.Uses++
-		record.LastUsed = time.Now().UTC()
-		return &selectedAPIKey{ID: record.ID, Name: record.Name, Key: plain}, nil
+		if record.Priority == highestPriority {
+			eligible = append(eligible, index)
+		}
 	}
-	return nil, errNoEnabledAPIKeys
+	if len(eligible) == 0 {
+		return nil, errNoEnabledAPIKeys
+	}
+	totalWeight := 0
+	for _, index := range eligible {
+		totalWeight += store.keys[index].Weight
+	}
+	slot := int(store.next % uint64(totalWeight))
+	store.next++
+	selectedIndex := eligible[0]
+	for _, index := range eligible {
+		if slot < store.keys[index].Weight {
+			selectedIndex = index
+			break
+		}
+		slot -= store.keys[index].Weight
+	}
+	record := &store.keys[selectedIndex]
+	plain, err := store.decrypt(*record)
+	if err != nil {
+		return nil, err
+	}
+	record.Uses++
+	record.DailyRequests++
+	record.LastUsed = now
+	if err := store.saveLocked(); err != nil {
+		return nil, err
+	}
+	return &selectedAPIKey{ID: record.ID, Name: record.Name, Key: plain}, nil
 }
 
 func (store *apiKeyStore) byID(id string) (*selectedAPIKey, error) {
@@ -385,6 +511,106 @@ func (store *apiKeyStore) recordResult(id string, status int, message string, co
 		store.keys[index].LastError = ""
 		store.keys[index].CooldownUntil = time.Time{}
 	}
+	_ = store.saveLocked()
+}
+
+func (store *apiKeyStore) recordUsage(id string, inputTokens, outputTokens uint64) {
+	if id == "" {
+		return
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	index := store.indexLocked(id)
+	if index < 0 {
+		return
+	}
+	record := &store.keys[index]
+	resetUsagePeriods(record, time.Now().UTC())
+	record.InputTokens += inputTokens
+	record.OutputTokens += outputTokens
+	record.MonthlySpendUSD += float64(inputTokens)*record.InputCostPerMillion/1_000_000 + float64(outputTokens)*record.OutputCostPerMillion/1_000_000
+	_ = store.saveLocked()
+}
+
+func (store *apiKeyStore) enabledForProbe() ([]selectedAPIKey, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.loadErr != nil {
+		return nil, store.loadErr
+	}
+	result := make([]selectedAPIKey, 0)
+	for _, record := range store.keys {
+		if !record.Enabled {
+			continue
+		}
+		plain, err := store.decrypt(record)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, selectedAPIKey{ID: record.ID, Name: record.Name, Key: plain})
+	}
+	return result, nil
+}
+
+func (store *apiKeyStore) exportBackup() ([]byte, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ready(); err != nil {
+		return nil, err
+	}
+	return json.MarshalIndent(persistedKeyFile{Version: 2, Keys: store.keys, Settings: store.settings}, "", "  ")
+}
+
+func (store *apiKeyStore) importBackup(raw []byte) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ready(); err != nil {
+		return err
+	}
+	var file persistedKeyFile
+	if err := json.Unmarshal(raw, &file); err != nil {
+		return err
+	}
+	if file.Version != 1 && file.Version != 2 {
+		return fmt.Errorf("unsupported backup version %d", file.Version)
+	}
+	for i := range file.Keys {
+		normalizeKeyPolicy(&file.Keys[i])
+		if _, err := store.decrypt(file.Keys[i]); err != nil {
+			return fmt.Errorf("backup cannot be decrypted with current KEY_STORE_SECRET: %w", err)
+		}
+	}
+	old := store.keys
+	oldSettings := store.settings
+	store.keys = file.Keys
+	store.settings = file.Settings
+	if err := store.saveLocked(); err != nil {
+		store.keys = old
+		store.settings = oldSettings
+		return err
+	}
+	return nil
+}
+
+func (store *apiKeyStore) savedSelectionMode() string {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.settings.SelectionMode
+}
+
+func (store *apiKeyStore) saveSelectionMode(mode string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ready(); err != nil {
+		return err
+	}
+	old := store.settings.SelectionMode
+	store.settings.SelectionMode = mode
+	if err := store.saveLocked(); err != nil {
+		store.settings.SelectionMode = old
+		return err
+	}
+	return nil
 }
 
 func (store *apiKeyStore) indexLocked(id string) int {
@@ -401,6 +627,11 @@ func keyView(record persistedAPIKey) apiKeyView {
 		ID: record.ID, Name: record.Name, Enabled: record.Enabled, Mask: record.Mask,
 		CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, Uses: record.Uses,
 		Failures: record.Failures, LastError: record.LastError,
+		Priority: record.Priority, Weight: record.Weight, Models: append([]string(nil), record.Models...),
+		DailyRequestLimit: record.DailyRequestLimit, DailyRequests: record.DailyRequests,
+		MonthlyBudgetUSD: record.MonthlyBudgetUSD, MonthlySpendUSD: record.MonthlySpendUSD,
+		InputCostPerMillion: record.InputCostPerMillion, OutputCostPerMillion: record.OutputCostPerMillion,
+		InputTokens: record.InputTokens, OutputTokens: record.OutputTokens,
 	}
 	if !record.LastUsed.IsZero() {
 		lastUsed := record.LastUsed
@@ -411,6 +642,79 @@ func keyView(record persistedAPIKey) apiKeyView {
 		view.CooldownUntil = &cooldownUntil
 	}
 	return view
+}
+
+func normalizeKeyPolicy(record *persistedAPIKey) {
+	if record.Weight < 1 {
+		record.Weight = 1
+	}
+	if record.Weight > 100 {
+		record.Weight = 100
+	}
+	record.Models = normalizeModels(record.Models)
+	resetUsagePeriods(record, time.Now().UTC())
+}
+
+func validateKeyPolicy(record persistedAPIKey) error {
+	if record.Weight < 0 || record.Weight > 100 {
+		return errors.New("weight must be between 1 and 100")
+	}
+	if record.Priority < -1000 || record.Priority > 1000 {
+		return errors.New("priority must be between -1000 and 1000")
+	}
+	if record.DailyRequestLimit < 0 || record.MonthlyBudgetUSD < 0 || record.InputCostPerMillion < 0 || record.OutputCostPerMillion < 0 {
+		return errors.New("limits and prices cannot be negative")
+	}
+	return nil
+}
+
+func normalizeModels(models []string) []string {
+	seen := make(map[string]bool)
+	result := make([]string, 0, len(models))
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" || seen[strings.ToLower(model)] {
+			continue
+		}
+		seen[strings.ToLower(model)] = true
+		result = append(result, model)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func resetUsagePeriods(record *persistedAPIKey, now time.Time) {
+	day := now.Format("2006-01-02")
+	month := now.Format("2006-01")
+	if record.UsageDay != day {
+		record.UsageDay = day
+		record.DailyRequests = 0
+	}
+	if record.UsageMonth != month {
+		record.UsageMonth = month
+		record.MonthlySpendUSD = 0
+	}
+}
+
+func keyAvailable(record persistedAPIKey, excluded map[string]bool, model string, now time.Time) bool {
+	if !record.Enabled || excluded[record.ID] || (!record.CooldownUntil.IsZero() && now.Before(record.CooldownUntil)) {
+		return false
+	}
+	if record.DailyRequestLimit > 0 && record.DailyRequests >= record.DailyRequestLimit {
+		return false
+	}
+	if record.MonthlyBudgetUSD > 0 && record.MonthlySpendUSD >= record.MonthlyBudgetUSD {
+		return false
+	}
+	if model == "" || len(record.Models) == 0 {
+		return true
+	}
+	for _, allowed := range record.Models {
+		if allowed == "*" || strings.EqualFold(allowed, model) {
+			return true
+		}
+	}
+	return false
 }
 
 func maskAPIKey(key string) string {
