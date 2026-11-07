@@ -274,3 +274,37 @@ func TestAzureResourceMismatchRetriesStateless(t *testing.T) {
 		t.Fatalf("resource-bound id survived retry: %#v", item)
 	}
 }
+
+func TestDirectResponsesAreSanitizedBeforeUpstream(t *testing.T) {
+	var calls atomic.Int32
+	seenBody := make(chan map[string]any, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		seenBody <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_ok","object":"response"}`))
+	}))
+	defer upstream.Close()
+	parsed, _ := url.Parse(upstream.URL)
+	proxy := newProxyServer(config{
+		UpstreamURL: parsed, Profile: "claude-code", StatelessResponses: true,
+	})
+
+	body := `{"model":"m","store":true,"previous_response_id":"resp_old","input":[{"type":"message","id":"msg_old","role":"user","content":"next"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	recorder := httptest.NewRecorder()
+	proxy.routes().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK || calls.Load() != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, calls.Load(), recorder.Body.String())
+	}
+	forwarded := <-seenBody
+	if forwarded["store"] != false || forwarded["previous_response_id"] != nil {
+		t.Fatalf("request was not proactively sanitized: %#v", forwarded)
+	}
+	item := forwarded["input"].([]any)[0].(map[string]any)
+	if _, exists := item["id"]; exists {
+		t.Fatalf("resource-bound id reached upstream: %#v", item)
+	}
+}

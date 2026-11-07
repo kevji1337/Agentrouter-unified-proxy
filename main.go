@@ -39,6 +39,7 @@ type config struct {
 	RetryOn5xx            bool
 	MaxBodyBytes          int64
 	ForceSequentialTools  bool
+	StatelessResponses    bool
 }
 
 func loadConfig() (config, error) {
@@ -96,12 +97,17 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("FORCE_SEQUENTIAL_TOOLS must be true or false")
 	}
+	statelessResponses, err := strconv.ParseBool(envDefault("STATELESS_RESPONSES", "true"))
+	if err != nil {
+		return config{}, fmt.Errorf("STATELESS_RESPONSES must be true or false")
+	}
 	return config{
 		UpstreamURL: upstream, ListenAddress: envDefault("LISTEN_ADDRESS", "0.0.0.0"),
 		Port: port, Profile: profile, ProxyAuthToken: strings.TrimSpace(os.Getenv("PROXY_AUTH_TOKEN")),
 		ResponseHeaderTimeout: responseTimeout, SSEIdleTimeout: sseTimeout,
 		WarmupInterval: warmupInterval, RetryDelay: retryDelay, MaxRetries: maxRetries,
 		RetryOn5xx: retryOn5xx, MaxBodyBytes: maxBodyBytes, ForceSequentialTools: forceSequentialTools,
+		StatelessResponses: statelessResponses,
 	}, nil
 }
 
@@ -508,6 +514,7 @@ func (server *proxyServer) handleHealth(w http.ResponseWriter, r *http.Request) 
 		"status": status, "upstream": server.cfg.UpstreamURL.String(),
 		"spoof_profile": server.cfg.Profile, "waf_cookie": present,
 		"waf_cookie_names": names, "force_sequential_tools": server.cfg.ForceSequentialTools,
+		"stateless_responses": server.cfg.StatelessResponses,
 	}
 	if !updated.IsZero() {
 		payload["waf_cookie_updated_at"] = updated.Format(time.RFC3339)
@@ -542,6 +549,14 @@ func (server *proxyServer) handleResponses(w http.ResponseWriter, r *http.Reques
 	body, err := readRequestBody(w, r, server.cfg.MaxBodyBytes)
 	if err != nil {
 		return
+	}
+	if server.cfg.StatelessResponses {
+		sanitized, _, sanitizeErr := sanitizeResourceBoundState(body)
+		if sanitizeErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", sanitizeErr.Error())
+			return
+		}
+		body = sanitized
 	}
 	obj, err := decodeObject(body)
 	if err != nil {

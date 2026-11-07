@@ -105,6 +105,7 @@ http://127.0.0.1:8080/v1/responses
 | `PORT` | `8080` | Порт HTTP-сервера |
 | `SPOOF_PROFILE` | `claude-code` | `claude-code` или `codex` |
 | `FORCE_SEQUENTIAL_TOOLS` | `true` | Один tool call за ход для совместимости с IDE |
+| `STATELESS_RESPONSES` | `true` | Удалять Azure resource-bound state до отправки Responses requests |
 | `PROXY_AUTH_TOKEN` | пусто | Требовать `X-Proxy-Token` на API и metrics |
 | `RESPONSE_HEADER_TIMEOUT` | `5m` | Ожидание upstream response headers |
 | `SSE_IDLE_TIMEOUT` | `10m` | Максимальная пауза между байтами upstream body |
