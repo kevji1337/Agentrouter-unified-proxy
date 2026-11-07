@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -40,6 +40,8 @@ func (server *proxyServer) handleAdminAPI(w http.ResponseWriter, r *http.Request
 	switch {
 	case r.URL.Path == "/api/admin/status":
 		server.handleAdminStatus(w, r)
+	case r.URL.Path == "/api/admin/settings":
+		server.handleAdminSettings(w, r)
 	case r.URL.Path == "/api/admin/keys":
 		server.handleAdminKeys(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/admin/keys/"):
@@ -58,11 +60,32 @@ func (server *proxyServer) handleAdminStatus(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "ok", "upstream": server.cfg.UpstreamURL.String(), "profile": server.cfg.Profile,
 		"waf_cookie": present, "waf_cookie_updated_at": optionalTime(updated),
-		"selection_mode": server.cfg.KeySelectionMode, "key_failover": server.cfg.KeyFailover,
+		"selection_mode": server.currentKeySelectionMode(), "key_failover": server.cfg.KeyFailover,
 		"key_cooldown": server.cfg.KeyCooldown.String(),
 		"store":        server.keys.status(), "force_sequential_tools": server.cfg.ForceSequentialTools,
 		"stateless_responses": server.cfg.StatelessResponses,
 	})
+}
+
+func (server *proxyServer) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPatch {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use PATCH")
+		return
+	}
+	var input struct {
+		SelectionMode string `json:"selection_mode"`
+	}
+	if err := decodeAdminJSON(w, r, &input); err != nil {
+		return
+	}
+	mode := strings.ToLower(strings.TrimSpace(input.SelectionMode))
+	if !validKeySelectionMode(mode) {
+		writeError(w, http.StatusBadRequest, "invalid_selection_mode", "use inbound-first, pool-first, or pool-only")
+		return
+	}
+	server.routingMode.Store(mode)
+	logEvent("info", "admin_routing_mode_changed", map[string]any{"selection_mode": mode})
+	writeJSON(w, http.StatusOK, map[string]any{"selection_mode": mode})
 }
 
 func (server *proxyServer) handleAdminKeys(w http.ResponseWriter, r *http.Request) {

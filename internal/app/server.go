@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bufio"
@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -378,11 +379,12 @@ func (store *cookieStore) warmup(ctx context.Context, upstream *url.URL) bool {
 }
 
 type proxyServer struct {
-	cfg     config
-	cookies *cookieStore
-	client  *http.Client
-	metrics *proxyMetrics
-	keys    *apiKeyStore
+	cfg         config
+	cookies     *cookieStore
+	client      *http.Client
+	metrics     *proxyMetrics
+	keys        *apiKeyStore
+	routingMode atomic.Value
 }
 
 func newProxyServer(cfg config) *proxyServer {
@@ -404,7 +406,7 @@ func newProxyServer(cfg config) *proxyServer {
 	transport.IdleConnTimeout = 90 * time.Second
 	transport.ResponseHeaderTimeout = cfg.ResponseHeaderTimeout
 	transport.ForceAttemptHTTP2 = true
-	return &proxyServer{
+	server := &proxyServer{
 		cfg: cfg, cookies: newCookieStore(), metrics: &proxyMetrics{},
 		keys: newAPIKeyStore(cfg.KeyStorePath, cfg.KeyStoreSecret),
 		client: &http.Client{
@@ -414,6 +416,20 @@ func newProxyServer(cfg config) *proxyServer {
 			},
 		},
 	}
+	server.routingMode.Store(cfg.KeySelectionMode)
+	return server
+}
+
+func (server *proxyServer) currentKeySelectionMode() string {
+	mode, _ := server.routingMode.Load().(string)
+	if mode == "" {
+		return server.cfg.KeySelectionMode
+	}
+	return mode
+}
+
+func validKeySelectionMode(mode string) bool {
+	return mode == "inbound-first" || mode == "pool-first" || mode == "pool-only"
 }
 
 func (server *proxyServer) upstreamURL(path string) string {
@@ -555,7 +571,7 @@ func (server *proxyServer) handleHealth(w http.ResponseWriter, r *http.Request) 
 		"spoof_profile": server.cfg.Profile, "waf_cookie": present,
 		"waf_cookie_names": names, "force_sequential_tools": server.cfg.ForceSequentialTools,
 		"stateless_responses": server.cfg.StatelessResponses,
-		"key_pool":            server.keys.status(), "key_selection_mode": server.cfg.KeySelectionMode,
+		"key_pool":            server.keys.status(), "key_selection_mode": server.currentKeySelectionMode(),
 	}
 	if !updated.IsZero() {
 		payload["waf_cookie_updated_at"] = updated.Format(time.RFC3339)
@@ -880,7 +896,7 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 }
 
 func (server *proxyServer) selectAuthorization(inbound string, excluded map[string]bool) (string, *selectedAPIKey, error) {
-	switch server.cfg.KeySelectionMode {
+	switch server.currentKeySelectionMode() {
 	case "pool-only":
 		return server.selectPoolAuthorization(excluded)
 	case "pool-first":
@@ -997,7 +1013,7 @@ func writeUpstreamError(w http.ResponseWriter, err error) {
 	writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
 }
 
-func main() {
+func Run() {
 	log.SetFlags(0)
 	cfg, err := loadConfig()
 	if err != nil {

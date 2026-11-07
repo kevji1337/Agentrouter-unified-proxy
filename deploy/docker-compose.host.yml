@@ -1,0 +1,43 @@
+services:
+  agentrouter-unified-proxy:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: agentrouter-unified-proxy:latest
+    container_name: agentrouter-unified-proxy
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    expose:
+      - "8080"
+    volumes:
+      - agentrouter-proxy-data:/data
+    networks:
+      - gateway
+
+  caddy:
+    image: caddy:2.10-alpine
+    container_name: agentrouter-caddy
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in deploy/.env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - agentrouter-unified-proxy
+    networks:
+      - gateway
+
+networks:
+  gateway:
+
+volumes:
+  agentrouter-proxy-data:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,18 @@
+{$DOMAIN} {
+    encode zstd gzip
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "no-referrer"
+        -Server
+    }
+
+    reverse_proxy agentrouter-unified-proxy:8080 {
+        flush_interval -1
+        transport http {
+            keepalive 2m
+            response_header_timeout 5m
+        }
+    }
+}

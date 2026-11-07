@@ -66,7 +66,7 @@ PowerShell использует обратный апостроф (backtick) `` 
 
 ```bash
 cp .env.example .env
-go run .
+go run ./cmd/proxy
 ```
 
 ### Готовый образ GHCR
@@ -262,11 +262,30 @@ curl.exe http://127.0.0.1:8080/v1/models `
 ## Разработка
 
 ```bash
-gofmt -w *.go
+gofmt -w cmd/proxy/*.go internal/app/*.go
 go vet ./...
 go test -race ./...
 docker build -t agentrouter-unified-proxy .
 ```
+
+## Структура проекта
+
+```text
+cmd/proxy/                 entry point
+internal/app/              proxy, conversion, auth, key pool, metrics
+internal/app/assets/       embedded administration UI
+deploy/                    Caddy and host Compose templates
+docs/                      deployment documentation
+.github/workflows/         CI and multi-arch image publishing
+```
+
+Для установки на VPS используйте [`docs/hosting.md`](docs/hosting.md). Готовый
+шаблон Caddy автоматически выпускает TLS-сертификат и не публикует внутренний
+порт прокси напрямую.
+
+Для Dokploy используйте отдельную инструкцию [`docs/dokploy.md`](docs/dokploy.md):
+источник GitHub, root `Dockerfile`, container port `8080` и persistent volume
+на `/data`.
 
 GitHub Actions выполняет format check, vet, race tests и Docker build. Tag вида
 `v1.0.0` публикует multi-arch image в GHCR.

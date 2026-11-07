@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -116,6 +116,22 @@ func TestAdminKeyAPI(t *testing.T) {
 	proxy.routes().ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/admin/keys", nil))
 	if unauthorized.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized status=%d", unauthorized.Code)
+	}
+}
+
+func TestAdminCanChangeRoutingModeAtRuntime(t *testing.T) {
+	parsed, _ := url.Parse("http://127.0.0.1:1")
+	proxy := newProxyServer(config{
+		UpstreamURL: parsed, Profile: "claude-code", AdminToken: "admin-secret",
+		KeyStoreSecret: "store-secret", KeyStorePath: filepath.Join(t.TempDir(), "keys.json"),
+		KeySelectionMode: "inbound-first",
+	})
+	request := httptest.NewRequest(http.MethodPatch, "/api/admin/settings", strings.NewReader(`{"selection_mode":"pool-only"}`))
+	request.Header.Set("X-Admin-Token", "admin-secret")
+	recorder := httptest.NewRecorder()
+	proxy.routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || proxy.currentKeySelectionMode() != "pool-only" {
+		t.Fatalf("status=%d mode=%s body=%s", recorder.Code, proxy.currentKeySelectionMode(), recorder.Body.String())
 	}
 }
 
