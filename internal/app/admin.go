@@ -57,10 +57,92 @@ func (server *proxyServer) handleAdminAPI(w http.ResponseWriter, r *http.Request
 		server.handleAdminLogs(w, r)
 	case r.URL.Path == "/api/admin/keys":
 		server.handleAdminKeys(w, r)
+	case r.URL.Path == "/api/admin/client-keys":
+		server.handleAdminClientKeys(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/admin/client-keys/"):
+		server.handleAdminClientKey(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/admin/keys/"):
 		server.handleAdminKey(w, r)
 	default:
 		writeError(w, http.StatusNotFound, "not_found", "admin endpoint not found")
+	}
+}
+
+func (server *proxyServer) handleAdminClientKeys(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		keys, err := server.keys.listClientKeys()
+		if err != nil {
+			writeAdminStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": keys})
+	case http.MethodPost:
+		var input struct {
+			Name string `json:"name"`
+		}
+		if err := decodeAdminJSON(w, r, &input); err != nil {
+			return
+		}
+		view, plain, err := server.keys.createClientKey(input.Name)
+		if err != nil {
+			writeAdminStoreError(w, err)
+			return
+		}
+		logEvent("info", "admin_client_key_created", map[string]any{"client_key_id": view.ID, "name": view.Name})
+		writeJSON(w, http.StatusCreated, map[string]any{"key": view, "token": plain})
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET or POST")
+	}
+}
+
+func (server *proxyServer) handleAdminClientKey(w http.ResponseWriter, r *http.Request) {
+	remainder := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/client-keys/"), "/")
+	parts := strings.Split(remainder, "/")
+	if len(parts) == 0 || parts[0] == "" || len(parts) > 2 {
+		writeError(w, http.StatusNotFound, "not_found", "client key not found")
+		return
+	}
+	id := parts[0]
+	if len(parts) == 2 {
+		if parts[1] != "reveal" || r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use POST on /reveal")
+			return
+		}
+		plain, err := server.keys.revealClientKey(id)
+		if err != nil {
+			writeAdminStoreError(w, err)
+			return
+		}
+		logEvent("info", "admin_client_key_revealed", map[string]any{"client_key_id": id})
+		writeJSON(w, http.StatusOK, map[string]any{"token": plain})
+		return
+	}
+	switch r.Method {
+	case http.MethodPatch:
+		var input struct {
+			Name    *string `json:"name"`
+			Enabled *bool   `json:"enabled"`
+		}
+		if err := decodeAdminJSON(w, r, &input); err != nil {
+			return
+		}
+		view, err := server.keys.updateClientKey(id, input.Enabled, input.Name)
+		if err != nil {
+			writeAdminStoreError(w, err)
+			return
+		}
+		logEvent("info", "admin_client_key_updated", map[string]any{"client_key_id": id, "enabled": view.Enabled})
+		writeJSON(w, http.StatusOK, view)
+	case http.MethodDelete:
+		if err := server.keys.deleteClientKey(id); err != nil {
+			writeAdminStoreError(w, err)
+			return
+		}
+		logEvent("info", "admin_client_key_deleted", map[string]any{"client_key_id": id})
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use PATCH or DELETE")
 	}
 }
 

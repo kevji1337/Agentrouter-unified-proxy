@@ -113,6 +113,9 @@ http://127.0.0.1:8080/v1/responses
 | `GET/POST` | `/api/admin/backup` | Encrypted export/import key store |
 | `GET` | `/api/admin/logs` | Live audit/request events |
 | `PATCH` | `/api/admin/settings` | Runtime routing mode |
+| `GET/POST` | `/api/admin/client-keys` | Список и генерация клиентских API keys |
+| `PATCH/DELETE` | `/api/admin/client-keys/{id}` | Enable/disable/delete client key |
+| `POST` | `/api/admin/client-keys/{id}/reveal` | Раскрыть ключ через admin session |
 
 ## Конфигурация
 
@@ -230,6 +233,24 @@ docker run -d --name agentrouter-unified-proxy --restart unless-stopped `
 Multi-admin конфигурация поддерживает роли `admin` и `viewer`, а также
 опциональный Base32 TOTP secret. UI после token+TOTP login использует 12-часовую
 in-memory session; TOTP-код не хранится и не отправляется повторно.
+
+### Клиентские API-ключи
+
+В панели можно создать отдельный ключ вида `arp_...` для IDE или приложения.
+Он используется как обычный OpenAI API key:
+
+```http
+Authorization: Bearer arp_...
+```
+
+Прокси проверяет его локально, удаляет клиентский credential перед upstream и
+подставляет AgentRouter key из encrypted pool. Client keys можно раскрывать,
+копировать, выключать и удалять; usage/last-used отображаются в панели.
+
+Как только существует хотя бы один enabled client key, неизвестные Bearer keys
+отклоняются с `401`. До создания первого ключа сохраняется прежний режим, чтобы
+не заблокировать bootstrap панели. `PROXY_AUTH_TOKEN` остаётся дополнительным
+аварийным токеном через `X-Proxy-Token`.
 
 Режимы выбора:
 

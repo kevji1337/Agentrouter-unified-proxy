@@ -72,7 +72,9 @@ PROXY_AUTH_TOKEN=<long-random-client-token>
 ```
 
 Clients then need `X-Proxy-Token`. If an IDE cannot send custom headers, place
-the application behind a VPN/IP allowlist rather than leaving it unauthenticated.
+the application behind a VPN/IP allowlist during bootstrap. After deployment,
+create a **Client API key** in `/admin`; it works in the IDE's standard API Key
+field as `Authorization: Bearer arp_...` and is never forwarded upstream.
 
 ## 4. Domain and HTTPS
 

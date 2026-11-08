@@ -1,6 +1,7 @@
 .env
 agentrouter-unified-proxy
 agentrouter-unified-proxy.exe
+proxy.exe
 coverage.out
 data/
 keys.json

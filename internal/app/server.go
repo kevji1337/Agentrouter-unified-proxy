@@ -530,20 +530,33 @@ func cors(next http.Handler) http.Handler {
 }
 
 func (server *proxyServer) authenticate(next http.Handler) http.Handler {
-	if server.cfg.ProxyAuthToken == "" {
-		return next
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions || r.URL.Path == "/health" || r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/api/admin/") {
 			next.ServeHTTP(w, r)
 			return
 		}
-		provided := r.Header.Get("X-Proxy-Token")
-		valid := len(provided) == len(server.cfg.ProxyAuthToken) &&
-			subtle.ConstantTimeCompare([]byte(provided), []byte(server.cfg.ProxyAuthToken)) == 1
-		if !valid {
-			writeError(w, http.StatusUnauthorized, "proxy_auth_required", "missing or invalid X-Proxy-Token")
+		hasClientKeys := server.keys.hasEnabledClientKeys()
+		if server.cfg.ProxyAuthToken == "" && !hasClientKeys {
+			next.ServeHTTP(w, r)
 			return
+		}
+		provided := r.Header.Get("X-Proxy-Token")
+		staticValid := server.cfg.ProxyAuthToken != "" && len(provided) == len(server.cfg.ProxyAuthToken) &&
+			subtle.ConstantTimeCompare([]byte(provided), []byte(server.cfg.ProxyAuthToken)) == 1
+		bearer := ""
+		if authorization := r.Header.Get("Authorization"); strings.HasPrefix(strings.ToLower(authorization), "bearer ") {
+			bearer = strings.TrimSpace(authorization[7:])
+		}
+		_, clientValid := server.keys.authenticateClientKey(bearer)
+		if !staticValid && !clientValid {
+			writeError(w, http.StatusUnauthorized, "proxy_auth_required", "missing or invalid proxy client API key")
+			return
+		}
+		if clientValid {
+			clone := r.Clone(r.Context())
+			clone.Header = r.Header.Clone()
+			clone.Header.Del("Authorization") // never forward proxy client credentials upstream
+			r = clone
 		}
 		next.ServeHTTP(w, r)
 	})

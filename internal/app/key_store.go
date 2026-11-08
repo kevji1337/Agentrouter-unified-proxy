@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -22,9 +23,34 @@ import (
 var errNoEnabledAPIKeys = errors.New("no enabled API keys in the key pool")
 
 type persistedKeyFile struct {
-	Version  int                  `json:"version"`
-	Keys     []persistedAPIKey    `json:"keys"`
-	Settings persistedKeySettings `json:"settings,omitempty"`
+	Version    int                  `json:"version"`
+	Keys       []persistedAPIKey    `json:"keys"`
+	ClientKeys []persistedClientKey `json:"client_keys,omitempty"`
+	Settings   persistedKeySettings `json:"settings,omitempty"`
+}
+
+type persistedClientKey struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Enabled    bool      `json:"enabled"`
+	Mask       string    `json:"mask"`
+	Nonce      string    `json:"nonce"`
+	Ciphertext string    `json:"ciphertext"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	Uses       uint64    `json:"uses,omitempty"`
+	LastUsed   time.Time `json:"last_used,omitempty"`
+}
+
+type clientKeyView struct {
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Enabled   bool       `json:"enabled"`
+	Mask      string     `json:"mask"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	Uses      uint64     `json:"uses"`
+	LastUsed  *time.Time `json:"last_used,omitempty"`
 }
 
 type persistedKeySettings struct {
@@ -102,25 +128,28 @@ type selectedAPIKey struct {
 }
 
 type apiKeyStore struct {
-	mu       sync.Mutex
-	path     string
-	aead     cipher.AEAD
-	keys     []persistedAPIKey
-	next     uint64
-	loadErr  error
-	readOnly bool
-	settings persistedKeySettings
+	mu         sync.Mutex
+	path       string
+	aead       cipher.AEAD
+	keys       []persistedAPIKey
+	clientKeys []persistedClientKey
+	next       uint64
+	loadErr    error
+	readOnly   bool
+	settings   persistedKeySettings
 }
 
 type apiKeyStoreStatus struct {
-	Ready           bool    `json:"ready"`
-	Error           string  `json:"error,omitempty"`
-	Total           int     `json:"total"`
-	Enabled         int     `json:"enabled"`
-	Available       int     `json:"available"`
-	InputTokens     uint64  `json:"input_tokens"`
-	OutputTokens    uint64  `json:"output_tokens"`
-	MonthlySpendUSD float64 `json:"monthly_spend_usd"`
+	Ready             bool    `json:"ready"`
+	Error             string  `json:"error,omitempty"`
+	Total             int     `json:"total"`
+	Enabled           int     `json:"enabled"`
+	Available         int     `json:"available"`
+	InputTokens       uint64  `json:"input_tokens"`
+	OutputTokens      uint64  `json:"output_tokens"`
+	MonthlySpendUSD   float64 `json:"monthly_spend_usd"`
+	ClientKeys        int     `json:"client_keys"`
+	EnabledClientKeys int     `json:"enabled_client_keys"`
 }
 
 func newAPIKeyStore(path, secret string) *apiKeyStore {
@@ -167,7 +196,13 @@ func (store *apiKeyStore) load() error {
 			return fmt.Errorf("decrypt key %q: check KEY_STORE_SECRET: %w", file.Keys[i].Name, err)
 		}
 	}
+	for _, clientKey := range file.ClientKeys {
+		if _, err := store.decryptClientKey(clientKey); err != nil {
+			return fmt.Errorf("decrypt client key %q: check KEY_STORE_SECRET: %w", clientKey.Name, err)
+		}
+	}
 	store.keys = file.Keys
+	store.clientKeys = file.ClientKeys
 	store.settings = file.Settings
 	return nil
 }
@@ -179,7 +214,7 @@ func (store *apiKeyStore) saveLocked() error {
 	if err := os.MkdirAll(filepath.Dir(store.path), 0o700); err != nil {
 		return fmt.Errorf("create key store directory: %w", err)
 	}
-	file := persistedKeyFile{Version: 2, Keys: store.keys, Settings: store.settings}
+	file := persistedKeyFile{Version: 2, Keys: store.keys, ClientKeys: store.clientKeys, Settings: store.settings}
 	raw, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return err
@@ -221,6 +256,19 @@ func (store *apiKeyStore) encrypt(plain string) (nonce, ciphertext string, err e
 }
 
 func (store *apiKeyStore) decrypt(record persistedAPIKey) (string, error) {
+	nonce, err := base64.RawStdEncoding.DecodeString(record.Nonce)
+	if err != nil {
+		return "", err
+	}
+	ciphertext, err := base64.RawStdEncoding.DecodeString(record.Ciphertext)
+	if err != nil {
+		return "", err
+	}
+	plain, err := store.aead.Open(nil, nonce, ciphertext, nil)
+	return string(plain), err
+}
+
+func (store *apiKeyStore) decryptClientKey(record persistedClientKey) (string, error) {
 	nonce, err := base64.RawStdEncoding.DecodeString(record.Nonce)
 	if err != nil {
 		return "", err
@@ -325,6 +373,12 @@ func (store *apiKeyStore) status() apiKeyStoreStatus {
 		status.InputTokens += key.InputTokens
 		status.OutputTokens += key.OutputTokens
 		status.MonthlySpendUSD += key.MonthlySpendUSD
+	}
+	status.ClientKeys = len(store.clientKeys)
+	for _, key := range store.clientKeys {
+		if key.Enabled {
+			status.EnabledClientKeys++
+		}
 	}
 	return status
 }
@@ -558,7 +612,7 @@ func (store *apiKeyStore) exportBackup() ([]byte, error) {
 	if err := store.ready(); err != nil {
 		return nil, err
 	}
-	return json.MarshalIndent(persistedKeyFile{Version: 2, Keys: store.keys, Settings: store.settings}, "", "  ")
+	return json.MarshalIndent(persistedKeyFile{Version: 2, Keys: store.keys, ClientKeys: store.clientKeys, Settings: store.settings}, "", "  ")
 }
 
 func (store *apiKeyStore) importBackup(raw []byte) error {
@@ -580,12 +634,20 @@ func (store *apiKeyStore) importBackup(raw []byte) error {
 			return fmt.Errorf("backup cannot be decrypted with current KEY_STORE_SECRET: %w", err)
 		}
 	}
+	for _, clientKey := range file.ClientKeys {
+		if _, err := store.decryptClientKey(clientKey); err != nil {
+			return fmt.Errorf("backup client key cannot be decrypted with current KEY_STORE_SECRET: %w", err)
+		}
+	}
 	old := store.keys
+	oldClientKeys := store.clientKeys
 	oldSettings := store.settings
 	store.keys = file.Keys
+	store.clientKeys = file.ClientKeys
 	store.settings = file.Settings
 	if err := store.saveLocked(); err != nil {
 		store.keys = old
+		store.clientKeys = oldClientKeys
 		store.settings = oldSettings
 		return err
 	}
@@ -611,6 +673,160 @@ func (store *apiKeyStore) saveSelectionMode(mode string) error {
 		return err
 	}
 	return nil
+}
+
+func (store *apiKeyStore) createClientKey(name string) (clientKeyView, string, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ready(); err != nil {
+		return clientKeyView{}, "", err
+	}
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > 80 {
+		return clientKeyView{}, "", errors.New("name must contain 1 to 80 characters")
+	}
+	for _, existing := range store.clientKeys {
+		if strings.EqualFold(existing.Name, name) {
+			return clientKeyView{}, "", errors.New("a client key with this name already exists")
+		}
+	}
+	random := make([]byte, 32)
+	if _, err := rand.Read(random); err != nil {
+		return clientKeyView{}, "", err
+	}
+	plain := "arp_" + base64.RawURLEncoding.EncodeToString(random)
+	nonce, ciphertext, err := store.encrypt(plain)
+	if err != nil {
+		return clientKeyView{}, "", err
+	}
+	now := time.Now().UTC()
+	record := persistedClientKey{ID: "client_" + randomKeyID()[4:], Name: name, Enabled: true, Mask: maskAPIKey(plain), Nonce: nonce, Ciphertext: ciphertext, CreatedAt: now, UpdatedAt: now}
+	store.clientKeys = append(store.clientKeys, record)
+	if err := store.saveLocked(); err != nil {
+		store.clientKeys = store.clientKeys[:len(store.clientKeys)-1]
+		return clientKeyView{}, "", err
+	}
+	return clientKeyViewOf(record), plain, nil
+}
+
+func (store *apiKeyStore) listClientKeys() ([]clientKeyView, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.loadErr != nil {
+		return nil, store.loadErr
+	}
+	result := make([]clientKeyView, 0, len(store.clientKeys))
+	for _, record := range store.clientKeys {
+		result = append(result, clientKeyViewOf(record))
+	}
+	return result, nil
+}
+
+func (store *apiKeyStore) revealClientKey(id string) (string, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	index := store.clientKeyIndexLocked(id)
+	if index < 0 {
+		return "", os.ErrNotExist
+	}
+	return store.decryptClientKey(store.clientKeys[index])
+}
+
+func (store *apiKeyStore) updateClientKey(id string, enabled *bool, name *string) (clientKeyView, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	index := store.clientKeyIndexLocked(id)
+	if index < 0 {
+		return clientKeyView{}, os.ErrNotExist
+	}
+	old := store.clientKeys[index]
+	if enabled != nil {
+		store.clientKeys[index].Enabled = *enabled
+	}
+	if name != nil {
+		trimmed := strings.TrimSpace(*name)
+		if trimmed == "" || len(trimmed) > 80 {
+			return clientKeyView{}, errors.New("name must contain 1 to 80 characters")
+		}
+		store.clientKeys[index].Name = trimmed
+	}
+	store.clientKeys[index].UpdatedAt = time.Now().UTC()
+	if err := store.saveLocked(); err != nil {
+		store.clientKeys[index] = old
+		return clientKeyView{}, err
+	}
+	return clientKeyViewOf(store.clientKeys[index]), nil
+}
+
+func (store *apiKeyStore) deleteClientKey(id string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	index := store.clientKeyIndexLocked(id)
+	if index < 0 {
+		return os.ErrNotExist
+	}
+	old := append([]persistedClientKey(nil), store.clientKeys...)
+	store.clientKeys = append(store.clientKeys[:index], store.clientKeys[index+1:]...)
+	if err := store.saveLocked(); err != nil {
+		store.clientKeys = old
+		return err
+	}
+	return nil
+}
+
+func (store *apiKeyStore) authenticateClientKey(plain string) (string, bool) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	matched := -1
+	for i, record := range store.clientKeys {
+		if !record.Enabled {
+			continue
+		}
+		candidate, err := store.decryptClientKey(record)
+		if err != nil || len(candidate) != len(plain) {
+			continue
+		}
+		if subtle.ConstantTimeCompare([]byte(candidate), []byte(plain)) == 1 {
+			matched = i
+		}
+	}
+	if matched < 0 {
+		return "", false
+	}
+	record := &store.clientKeys[matched]
+	record.Uses++
+	record.LastUsed = time.Now().UTC()
+	_ = store.saveLocked()
+	return record.ID, true
+}
+
+func (store *apiKeyStore) hasEnabledClientKeys() bool {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for _, record := range store.clientKeys {
+		if record.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
+func (store *apiKeyStore) clientKeyIndexLocked(id string) int {
+	for i := range store.clientKeys {
+		if store.clientKeys[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func clientKeyViewOf(record persistedClientKey) clientKeyView {
+	view := clientKeyView{ID: record.ID, Name: record.Name, Enabled: record.Enabled, Mask: record.Mask, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, Uses: record.Uses}
+	if !record.LastUsed.IsZero() {
+		lastUsed := record.LastUsed
+		view.LastUsed = &lastUsed
+	}
+	return view
 }
 
 func (store *apiKeyStore) indexLocked(id string) int {

@@ -267,3 +267,73 @@ func TestAdminSessionEnforcesViewerRole(t *testing.T) {
 		t.Fatalf("viewer mutation status=%d body=%s", mutationRecorder.Code, mutationRecorder.Body.String())
 	}
 }
+
+func TestClientAPIKeysAreEncryptedAndAuthenticate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keys.json")
+	store := newAPIKeyStore(path, "client-key-secret")
+	view, plain, err := store.createClientKey("Laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(plain, "arp_") || view.Mask == plain {
+		t.Fatalf("generated client key is invalid: view=%#v", view)
+	}
+	raw, _ := os.ReadFile(path)
+	if bytes.Contains(raw, []byte(plain)) {
+		t.Fatal("client key was stored in plaintext")
+	}
+	if id, ok := store.authenticateClientKey(plain); !ok || id != view.ID {
+		t.Fatalf("client key authentication failed: id=%s ok=%v", id, ok)
+	}
+	revealed, err := store.revealClientKey(view.ID)
+	if err != nil || revealed != plain {
+		t.Fatalf("reveal=%q err=%v", revealed, err)
+	}
+	disabled := false
+	if _, err := store.updateClientKey(view.ID, &disabled, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.authenticateClientKey(plain); ok {
+		t.Fatal("disabled client key authenticated")
+	}
+}
+
+func TestClientBearerKeyUsesStoredUpstreamKey(t *testing.T) {
+	seenAuth := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenAuth <- r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[]}`))
+	}))
+	defer upstream.Close()
+	parsed, _ := url.Parse(upstream.URL)
+	proxy := newProxyServer(config{
+		UpstreamURL: parsed, Profile: "claude-code", KeySelectionMode: "pool-first",
+		KeyStoreSecret: "client-routing-secret", KeyStorePath: filepath.Join(t.TempDir(), "keys.json"),
+	})
+	if _, err := proxy.keys.add("Upstream", "sk-upstream-secret", true); err != nil {
+		t.Fatal(err)
+	}
+	_, clientToken, err := proxy.keys.createClientKey("IDE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	request.Header.Set("Authorization", "Bearer "+clientToken)
+	recorder := httptest.NewRecorder()
+	proxy.routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if auth := <-seenAuth; auth != "Bearer sk-upstream-secret" {
+		t.Fatalf("upstream received %q", auth)
+	}
+
+	invalid := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	invalid.Header.Set("Authorization", "Bearer arp_invalid")
+	invalidRecorder := httptest.NewRecorder()
+	proxy.routes().ServeHTTP(invalidRecorder, invalid)
+	if invalidRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid client key status=%d", invalidRecorder.Code)
+	}
+}
