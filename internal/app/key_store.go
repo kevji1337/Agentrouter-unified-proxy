@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -84,6 +85,8 @@ type persistedAPIKey struct {
 	MonthlySpendUSD      float64   `json:"monthly_spend_usd,omitempty"`
 	InputTokens          uint64    `json:"input_tokens,omitempty"`
 	OutputTokens         uint64    `json:"output_tokens,omitempty"`
+	BaseURL              string    `json:"base_url,omitempty"`
+	SpoofProfile         string    `json:"spoof_profile,omitempty"`
 }
 
 type apiKeyView struct {
@@ -109,6 +112,8 @@ type apiKeyView struct {
 	OutputCostPerMillion float64    `json:"output_cost_per_million"`
 	InputTokens          uint64     `json:"input_tokens"`
 	OutputTokens         uint64     `json:"output_tokens"`
+	BaseURL              string     `json:"base_url,omitempty"`
+	SpoofProfile         string     `json:"spoof_profile,omitempty"`
 }
 
 type apiKeyPolicy struct {
@@ -119,12 +124,16 @@ type apiKeyPolicy struct {
 	MonthlyBudgetUSD     float64  `json:"monthly_budget_usd"`
 	InputCostPerMillion  float64  `json:"input_cost_per_million"`
 	OutputCostPerMillion float64  `json:"output_cost_per_million"`
+	BaseURL              string   `json:"base_url"`
+	SpoofProfile         string   `json:"spoof_profile"`
 }
 
 type selectedAPIKey struct {
-	ID   string
-	Name string
-	Key  string
+	ID           string
+	Name         string
+	Key          string
+	BaseURL      string
+	SpoofProfile string
 }
 
 type apiKeyStore struct {
@@ -137,6 +146,7 @@ type apiKeyStore struct {
 	loadErr    error
 	readOnly   bool
 	settings   persistedKeySettings
+	saveHook   func([]byte) error
 }
 
 type apiKeyStoreStatus struct {
@@ -243,7 +253,18 @@ func (store *apiKeyStore) saveLocked() error {
 	if err := os.Rename(temporaryName, store.path); err != nil {
 		return fmt.Errorf("replace key store: %w", err)
 	}
+	if store.saveHook != nil {
+		if err := store.saveHook(raw); err != nil {
+			return fmt.Errorf("persist key store: %w", err)
+		}
+	}
 	return nil
+}
+
+func (store *apiKeyStore) setSaveHook(hook func([]byte) error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.saveHook = hook
 }
 
 func (store *apiKeyStore) encrypt(plain string) (nonce, ciphertext string, err error) {
@@ -324,6 +345,7 @@ func (store *apiKeyStore) addWithPolicy(name, key string, enabled bool, policy a
 		Priority: policy.Priority, Weight: policy.Weight, Models: normalizeModels(policy.Models),
 		DailyRequestLimit: policy.DailyRequestLimit, MonthlyBudgetUSD: policy.MonthlyBudgetUSD,
 		InputCostPerMillion: policy.InputCostPerMillion, OutputCostPerMillion: policy.OutputCostPerMillion,
+		BaseURL: strings.TrimRight(strings.TrimSpace(policy.BaseURL), "/"), SpoofProfile: strings.ToLower(strings.TrimSpace(policy.SpoofProfile)),
 	}
 	if err := validateKeyPolicy(record); err != nil {
 		return apiKeyView{}, err
@@ -435,6 +457,8 @@ func (store *apiKeyStore) updatePolicy(id string, policy apiKeyPolicy) (apiKeyVi
 	store.keys[index].MonthlyBudgetUSD = policy.MonthlyBudgetUSD
 	store.keys[index].InputCostPerMillion = policy.InputCostPerMillion
 	store.keys[index].OutputCostPerMillion = policy.OutputCostPerMillion
+	store.keys[index].BaseURL = strings.TrimRight(strings.TrimSpace(policy.BaseURL), "/")
+	store.keys[index].SpoofProfile = strings.ToLower(strings.TrimSpace(policy.SpoofProfile))
 	if err := validateKeyPolicy(store.keys[index]); err != nil {
 		store.keys[index] = old
 		return apiKeyView{}, err
@@ -475,6 +499,10 @@ func (store *apiKeyStore) selectNext(excluded map[string]bool) (*selectedAPIKey,
 }
 
 func (store *apiKeyStore) selectNextForModel(excluded map[string]bool, model string) (*selectedAPIKey, error) {
+	return store.selectNextForModelLoads(excluded, model, nil)
+}
+
+func (store *apiKeyStore) selectNextForModelLoads(excluded map[string]bool, model string, loads map[string]int64) (*selectedAPIKey, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.loadErr != nil {
@@ -503,6 +531,21 @@ func (store *apiKeyStore) selectNextForModel(excluded map[string]bool, model str
 	if len(eligible) == 0 {
 		return nil, errNoEnabledAPIKeys
 	}
+	if len(loads) > 0 {
+		minimum := int64(1 << 62)
+		for _, index := range eligible {
+			if load := loads[store.keys[index].ID]; load < minimum {
+				minimum = load
+			}
+		}
+		filtered := eligible[:0]
+		for _, index := range eligible {
+			if loads[store.keys[index].ID] == minimum {
+				filtered = append(filtered, index)
+			}
+		}
+		eligible = filtered
+	}
 	totalWeight := 0
 	for _, index := range eligible {
 		totalWeight += store.keys[index].Weight
@@ -528,7 +571,17 @@ func (store *apiKeyStore) selectNextForModel(excluded map[string]bool, model str
 	if err := store.saveLocked(); err != nil {
 		return nil, err
 	}
-	return &selectedAPIKey{ID: record.ID, Name: record.Name, Key: plain}, nil
+	return &selectedAPIKey{ID: record.ID, Name: record.Name, Key: plain, BaseURL: record.BaseURL, SpoofProfile: record.SpoofProfile}, nil
+}
+
+func (store *apiKeyStore) allKeyIDs() []string {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	ids := make([]string, 0, len(store.keys))
+	for _, key := range store.keys {
+		ids = append(ids, key.ID)
+	}
+	return ids
 }
 
 func (store *apiKeyStore) byID(id string) (*selectedAPIKey, error) {
@@ -542,7 +595,7 @@ func (store *apiKeyStore) byID(id string) (*selectedAPIKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &selectedAPIKey{ID: id, Name: store.keys[index].Name, Key: plain}, nil
+	return &selectedAPIKey{ID: id, Name: store.keys[index].Name, Key: plain, BaseURL: store.keys[index].BaseURL, SpoofProfile: store.keys[index].SpoofProfile}, nil
 }
 
 func (store *apiKeyStore) recordResult(id string, status int, message string, cooldown time.Duration) {
@@ -601,7 +654,7 @@ func (store *apiKeyStore) enabledForProbe() ([]selectedAPIKey, error) {
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, selectedAPIKey{ID: record.ID, Name: record.Name, Key: plain})
+		result = append(result, selectedAPIKey{ID: record.ID, Name: record.Name, Key: plain, BaseURL: record.BaseURL, SpoofProfile: record.SpoofProfile})
 	}
 	return result, nil
 }
@@ -848,6 +901,7 @@ func keyView(record persistedAPIKey) apiKeyView {
 		MonthlyBudgetUSD: record.MonthlyBudgetUSD, MonthlySpendUSD: record.MonthlySpendUSD,
 		InputCostPerMillion: record.InputCostPerMillion, OutputCostPerMillion: record.OutputCostPerMillion,
 		InputTokens: record.InputTokens, OutputTokens: record.OutputTokens,
+		BaseURL: record.BaseURL, SpoofProfile: record.SpoofProfile,
 	}
 	if !record.LastUsed.IsZero() {
 		lastUsed := record.LastUsed
@@ -880,6 +934,15 @@ func validateKeyPolicy(record persistedAPIKey) error {
 	}
 	if record.DailyRequestLimit < 0 || record.MonthlyBudgetUSD < 0 || record.InputCostPerMillion < 0 || record.OutputCostPerMillion < 0 {
 		return errors.New("limits and prices cannot be negative")
+	}
+	if record.BaseURL != "" {
+		parsed, err := url.Parse(record.BaseURL)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return errors.New("base_url must be an absolute http(s) URL")
+		}
+	}
+	if record.SpoofProfile != "" && record.SpoofProfile != "claude-code" && record.SpoofProfile != "codex" && record.SpoofProfile != "generic" {
+		return errors.New("spoof_profile must be claude-code, codex, or generic")
 	}
 	return nil
 }

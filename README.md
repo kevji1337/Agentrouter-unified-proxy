@@ -105,6 +105,8 @@ http://127.0.0.1:8080/v1/responses
 | `GET` | `/v1/models`, `/models` | Upstream model discovery |
 | `GET` | `/health` | WAF-cookie и состояние сервиса |
 | `GET` | `/metrics` | Prometheus text format |
+| `GET` | `/docs` | ReDoc API documentation |
+| `GET` | `/openapi.json` | OpenAPI 3.1 schema |
 | `GET` | `/admin` | Web-панель управления |
 | `GET/POST` | `/api/admin/keys` | Список и добавление stored keys |
 | `PATCH/DELETE` | `/api/admin/keys/{id}` | Включение, переименование и удаление |
@@ -327,6 +329,31 @@ docs/                      deployment documentation
 Для Dokploy используйте отдельную инструкцию [`docs/dokploy.md`](docs/dokploy.md):
 источник GitHub, root `Dockerfile`, container port `8080` и persistent volume
 на `/data`.
+
+## PostgreSQL, Redis и alerts
+
+`STORAGE_BACKEND=postgres` сохраняет encrypted gateway state и audit events в
+PostgreSQL; при первом запуске существующий `/data/keys.json` автоматически
+импортируется. Redis хранит distributed admin sessions, alert cooldown и active
+request counters для least-loaded routing между replicas.
+
+```dotenv
+STORAGE_BACKEND=postgres
+DATABASE_URL=postgresql://...
+REDIS_URL=redis://...
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
+ALERT_COOLDOWN=5m
+```
+
+Telegram получает deduplicated alerts о key failover, WAF/Azure retries,
+отсутствии доступных ключей и недоступности PostgreSQL/Redis.
+
+Каждый upstream key может иметь собственные `base_url`, `spoof_profile`, model
+allowlist, priority, weight и limits. Это позволяет объединять AgentRouter и
+другие OpenAI-compatible endpoints в одном gateway.
+
+Примеры клиентов находятся в `sdk/python`, `sdk/typescript` и `sdk/go`.
 
 GitHub Actions выполняет format check, vet, race tests и Docker build. Tag вида
 `v1.0.0` публикует multi-arch image в GHCR.

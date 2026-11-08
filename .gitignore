@@ -5,3 +5,5 @@ proxy.exe
 coverage.out
 data/
 keys.json
+__pycache__/
+*.pyc

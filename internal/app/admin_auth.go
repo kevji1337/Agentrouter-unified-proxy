@@ -51,6 +51,10 @@ func parseAdminAccounts(raw, legacyToken string) ([]adminAccount, error) {
 
 func (server *proxyServer) authenticateAdmin(r *http.Request) (*adminAccount, error) {
 	if sessionID := r.Header.Get("X-Admin-Session"); sessionID != "" {
+		if session, ok := server.infra.loadAdminSession(r.Context(), sessionID); ok {
+			account := session.Account
+			return &account, nil
+		}
 		server.adminMu.Lock()
 		session, ok := server.adminSessions[sessionID]
 		if ok && time.Now().Before(session.Expires) {
@@ -81,6 +85,7 @@ func (server *proxyServer) createAdminSession(account *adminAccount) (string, ti
 	server.adminMu.Lock()
 	server.adminSessions[id] = adminSession{Account: *account, Expires: expires}
 	server.adminMu.Unlock()
+	server.infra.saveAdminSession(context.Background(), id, adminSession{Account: *account, Expires: expires})
 	return id, expires
 }
 

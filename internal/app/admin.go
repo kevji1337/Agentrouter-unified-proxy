@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -23,6 +24,26 @@ func (server *proxyServer) handleAdminPage(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = io.WriteString(w, adminDashboardHTML)
+}
+
+func (server *proxyServer) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	_, _ = w.Write(openAPISpec)
+}
+
+func (server *proxyServer) handleAPIDocs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'")
+	_, _ = io.WriteString(w, apiDocsHTML)
 }
 
 func (server *proxyServer) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
@@ -190,6 +211,7 @@ func (server *proxyServer) handleAdminStatus(w http.ResponseWriter, r *http.Requ
 		"key_health_interval": server.cfg.KeyHealthInterval.String(), "last_key_health_at": optionalTime(lastKeyHealth),
 		"store": server.keys.status(), "force_sequential_tools": server.cfg.ForceSequentialTools,
 		"stateless_responses": server.cfg.StatelessResponses,
+		"infrastructure":      server.infra.health(),
 		"admin":               map[string]any{"name": account.Name, "role": account.Role},
 	})
 }
@@ -367,7 +389,7 @@ func (server *proxyServer) handleAdminKeyTest(w http.ResponseWriter, r *http.Req
 		return
 	}
 	started := time.Now()
-	status, message := server.probeAPIKey(r.Context(), key.Key)
+	status, message := server.probeAPIKey(r.Context(), *key)
 	server.keys.recordResult(id, status, message, server.cfg.KeyCooldown)
 	result := map[string]any{
 		"ok": status >= 200 && status < 300, "status": status,
@@ -376,14 +398,24 @@ func (server *proxyServer) handleAdminKeyTest(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (server *proxyServer) probeAPIKey(ctx context.Context, key string) (int, string) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.upstreamURL("/v1/models"), nil)
+func (server *proxyServer) probeAPIKey(ctx context.Context, key selectedAPIKey) (int, string) {
+	baseURL := server.cfg.UpstreamURL
+	profile := server.cfg.Profile
+	if key.BaseURL != "" {
+		if parsed, err := url.Parse(key.BaseURL); err == nil {
+			baseURL = parsed
+		}
+	}
+	if key.SpoofProfile != "" {
+		profile = key.SpoofProfile
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.upstreamURLFor(baseURL, "/v1/models"), nil)
 	if err != nil {
 		return 0, err.Error()
 	}
-	req.Header = spoofHeaders(server.cfg.Profile)
-	req.Header.Set("Authorization", "Bearer "+key)
-	if cookie := server.cookies.header(); cookie != "" {
+	req.Header = spoofHeaders(profile)
+	req.Header.Set("Authorization", "Bearer "+key.Key)
+	if cookie := server.cookies.header(); cookie != "" && baseURL.Host == server.cfg.UpstreamURL.Host {
 		req.Header.Set("Cookie", cookie)
 	}
 	resp, err := server.client.Do(req)

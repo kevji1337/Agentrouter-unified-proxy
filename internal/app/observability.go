@@ -23,6 +23,7 @@ type logRing struct {
 }
 
 var adminLogRing = &logRing{items: make([]map[string]any, 0, 500)}
+var persistentLogSink atomic.Value
 
 func requestIDFromContext(ctx context.Context) string {
 	value, _ := ctx.Value(requestIDContextKey{}).(string)
@@ -59,12 +60,19 @@ func logEvent(level, message string, fields map[string]any) {
 		record[key] = value
 	}
 	adminLogRing.add(record)
+	if sink, ok := persistentLogSink.Load().(func(map[string]any)); ok && sink != nil {
+		sink(record)
+	}
 	encoded, err := json.Marshal(record)
 	if err != nil {
 		log.Printf(`{"level":"error","message":"failed to encode log record"}`)
 		return
 	}
 	log.Print(string(encoded))
+}
+
+func setPersistentLogSink(sink func(map[string]any)) {
+	persistentLogSink.Store(sink)
 }
 
 func (ring *logRing) add(record map[string]any) {

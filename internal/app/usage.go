@@ -16,6 +16,29 @@ type usageTrackingBody struct {
 	once    sync.Once
 }
 
+type releaseBody struct {
+	body    io.ReadCloser
+	release func()
+	once    sync.Once
+}
+
+func newReleaseBody(body io.ReadCloser, release func()) io.ReadCloser {
+	return &releaseBody{body: body, release: release}
+}
+
+func (body *releaseBody) Read(target []byte) (int, error) {
+	n, err := body.body.Read(target)
+	if err != nil {
+		body.once.Do(body.release)
+	}
+	return n, err
+}
+
+func (body *releaseBody) Close() error {
+	body.once.Do(body.release)
+	return body.body.Close()
+}
+
 func newUsageTrackingBody(body io.ReadCloser, onUsage func(input, output uint64)) io.ReadCloser {
 	return &usageTrackingBody{body: body, onUsage: onUsage}
 }

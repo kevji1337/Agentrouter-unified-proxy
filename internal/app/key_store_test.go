@@ -337,3 +337,28 @@ func TestClientBearerKeyUsesStoredUpstreamKey(t *testing.T) {
 		t.Fatalf("invalid client key status=%d", invalidRecorder.Code)
 	}
 }
+
+func TestPerKeyUpstreamEndpoint(t *testing.T) {
+	defaultCalls := atomic.Int32{}
+	defaultUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { defaultCalls.Add(1); w.WriteHeader(500) }))
+	defer defaultUpstream.Close()
+	customCalls := atomic.Int32{}
+	customUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		customCalls.Add(1)
+		if r.Header.Get("Authorization") != "Bearer sk-custom-upstream" {
+			t.Errorf("authorization=%q", r.Header.Get("Authorization"))
+		}
+		_, _ = w.Write([]byte(`{"object":"list","data":[]}`))
+	}))
+	defer customUpstream.Close()
+	parsed, _ := url.Parse(defaultUpstream.URL)
+	proxy := newProxyServer(config{UpstreamURL: parsed, Profile: "claude-code", KeySelectionMode: "pool-only", KeyStoreSecret: "custom-endpoint-secret", KeyStorePath: filepath.Join(t.TempDir(), "keys.json")})
+	if _, err := proxy.keys.addWithPolicy("Custom", "sk-custom-upstream", true, apiKeyPolicy{Weight: 1, BaseURL: customUpstream.URL, SpoofProfile: "generic"}); err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	proxy.routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	if recorder.Code != http.StatusOK || customCalls.Load() != 1 || defaultCalls.Load() != 0 {
+		t.Fatalf("status=%d custom=%d default=%d", recorder.Code, customCalls.Load(), defaultCalls.Load())
+	}
+}

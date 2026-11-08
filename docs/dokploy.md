@@ -53,6 +53,13 @@ FORCE_SEQUENTIAL_TOOLS=true
 STATELESS_RESPONSES=true
 RESPONSE_HEADER_TIMEOUT=5m
 SSE_IDLE_TIMEOUT=10m
+
+STORAGE_BACKEND=postgres
+DATABASE_URL=postgresql://agentrouter:PASSWORD@agentrouter-postgres:5432/agentrouter?sslmode=disable
+REDIS_URL=redis://:PASSWORD@agentrouter-redis:6379/0
+TELEGRAM_BOT_TOKEN=<telegram-bot-token>
+TELEGRAM_CHAT_ID=<telegram-chat-id>
+ALERT_COOLDOWN=5m
 ```
 
 Optional multi-admin RBAC with TOTP can replace or complement `ADMIN_TOKEN`:

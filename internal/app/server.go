@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,6 +50,12 @@ type config struct {
 	KeyFailover           bool
 	KeyCooldown           time.Duration
 	KeyHealthInterval     time.Duration
+	DatabaseURL           string
+	RedisURL              string
+	StorageBackend        string
+	TelegramBotToken      string
+	TelegramChatID        string
+	AlertCooldown         time.Duration
 }
 
 func loadConfig() (config, error) {
@@ -126,6 +133,14 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	alertCooldown, err := envDuration("ALERT_COOLDOWN", 5*time.Minute)
+	if err != nil {
+		return config{}, err
+	}
+	storageBackend := strings.ToLower(envDefault("STORAGE_BACKEND", "file"))
+	if storageBackend != "file" && storageBackend != "postgres" {
+		return config{}, fmt.Errorf("STORAGE_BACKEND must be file or postgres")
+	}
 	adminToken := strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
 	adminAccounts, err := parseAdminAccounts(os.Getenv("ADMIN_ACCOUNTS_JSON"), adminToken)
 	if err != nil {
@@ -146,6 +161,9 @@ func loadConfig() (config, error) {
 		KeyStoreSecret: keyStoreSecret, KeySelectionMode: keySelectionMode, KeyFailover: keyFailover,
 		KeyCooldown:       keyCooldown,
 		KeyHealthInterval: keyHealthInterval,
+		DatabaseURL:       strings.TrimSpace(os.Getenv("DATABASE_URL")), RedisURL: strings.TrimSpace(os.Getenv("REDIS_URL")),
+		StorageBackend: storageBackend, TelegramBotToken: strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
+		TelegramChatID: strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")), AlertCooldown: alertCooldown,
 	}, nil
 }
 
@@ -227,6 +245,10 @@ func loadDotEnv(path string) error {
 
 func spoofHeaders(profile string) http.Header {
 	headers := make(http.Header)
+	if profile == "generic" {
+		headers.Set("User-Agent", "agentrouter-unified-proxy/3.0")
+		return headers
+	}
 	if profile == "codex" {
 		headers.Set("User-Agent", "codex-cli/0.52.0 (external, codex)")
 		headers.Set("X-App", "codex")
@@ -399,6 +421,7 @@ type proxyServer struct {
 	lastKeyHealth atomic.Value
 	adminMu       sync.Mutex
 	adminSessions map[string]adminSession
+	infra         *infrastructure
 }
 
 func newProxyServer(cfg config) *proxyServer {
@@ -476,7 +499,7 @@ func (server *proxyServer) probeAllKeys(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		status, message := server.probeAPIKey(ctx, key.Key)
+		status, message := server.probeAPIKey(ctx, key)
 		server.keys.recordResult(key.ID, status, message, server.cfg.KeyCooldown)
 	}
 	now := time.Now().UTC()
@@ -489,16 +512,23 @@ func validKeySelectionMode(mode string) bool {
 }
 
 func (server *proxyServer) upstreamURL(path string) string {
-	target := *server.cfg.UpstreamURL
-	target.Path = strings.TrimRight(target.Path, "/") + path
+	return server.upstreamURLFor(server.cfg.UpstreamURL, path)
+}
+
+func (server *proxyServer) upstreamURLFor(base *url.URL, path string) string {
+	target := *base
+	pathOnly, rawQuery, _ := strings.Cut(path, "?")
+	target.Path = strings.TrimRight(target.Path, "/") + pathOnly
 	target.RawPath = ""
-	target.RawQuery = ""
+	target.RawQuery = rawQuery
 	return target.String()
 }
 
 func (server *proxyServer) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/admin", server.handleAdminPage)
+	mux.HandleFunc("/openapi.json", server.handleOpenAPI)
+	mux.HandleFunc("/docs", server.handleAPIDocs)
 	mux.HandleFunc("/api/admin/", server.handleAdminAPI)
 	mux.HandleFunc("/health", server.handleHealth)
 	mux.HandleFunc("/metrics", server.metrics.handler(server.cookies, server.keys))
@@ -506,6 +536,9 @@ func (server *proxyServer) routes() http.Handler {
 	mux.HandleFunc("/models", server.handleModels)
 	mux.HandleFunc("/v1/chat/completions", server.handleChatCompletions)
 	mux.HandleFunc("/v1/responses", server.handleResponses)
+	for _, path := range []string{"/v1/completions", "/v1/embeddings", "/v1/moderations", "/v1/rerank", "/v1/files", "/v1/files/", "/v1/batches", "/v1/batches/", "/v1/images/", "/v1/audio/"} {
+		mux.HandleFunc(path, server.handlePassthrough)
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" && r.Method == http.MethodGet {
 			http.Redirect(w, r, "/admin", http.StatusTemporaryRedirect)
@@ -520,7 +553,7 @@ func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Api-Key, X-Proxy-Token, X-Request-ID")
-		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, PATCH, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -531,7 +564,7 @@ func cors(next http.Handler) http.Handler {
 
 func (server *proxyServer) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodOptions || r.URL.Path == "/health" || r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/api/admin/") {
+		if r.Method == http.MethodOptions || r.URL.Path == "/health" || r.URL.Path == "/admin" || r.URL.Path == "/docs" || r.URL.Path == "/openapi.json" || strings.HasPrefix(r.URL.Path, "/api/admin/") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -641,6 +674,7 @@ func (server *proxyServer) handleHealth(w http.ResponseWriter, r *http.Request) 
 		"waf_cookie_names": names, "force_sequential_tools": server.cfg.ForceSequentialTools,
 		"stateless_responses": server.cfg.StatelessResponses,
 		"key_pool":            server.keys.status(), "key_selection_mode": server.currentKeySelectionMode(),
+		"infrastructure": server.infra.health(),
 	}
 	if !updated.IsZero() {
 		payload["waf_cookie_updated_at"] = updated.Format(time.RFC3339)
@@ -792,6 +826,38 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 	_, _ = w.Write(chat)
 }
 
+func (server *proxyServer) handlePassthrough(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	var body []byte
+	var err error
+	if r.Method != http.MethodGet && r.Method != http.MethodDelete && r.Body != nil {
+		body, err = readRequestBody(w, r, server.cfg.MaxBodyBytes)
+		if err != nil {
+			return
+		}
+	}
+	path := r.URL.Path
+	if r.URL.RawQuery != "" {
+		path += "?" + r.URL.RawQuery
+	}
+	resp, err := server.doUpstream(r.Context(), r.Header, r.Method, path, body, false)
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+	defer resp.Body.Close()
+	copyResponseHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	if isEventStream(resp.Header) {
+		streamCopy(w, resp.Body)
+		return
+	}
+	_, _ = io.Copy(w, resp.Body)
+}
+
 func readRequestBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, error) {
 	defer r.Body.Close()
 	reader := http.MaxBytesReader(w, r.Body, limit)
@@ -824,6 +890,9 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 	model := modelFromRequestBody(body)
 	authHeader, selectedKey, err := server.selectAuthorization(inbound.Get("Authorization"), excludedKeys, model)
 	if err != nil {
+		if errors.Is(err, errNoEnabledAPIKeys) {
+			logEvent("error", "no_available_api_keys", map[string]any{"model": model})
+		}
 		return nil, err
 	}
 	for {
@@ -832,19 +901,39 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 			requestBody = bytes.NewReader(body)
 		}
 		attemptCtx, cancel := context.WithCancel(ctx)
-		req, err := http.NewRequestWithContext(attemptCtx, method, server.upstreamURL(path), requestBody)
+		baseURL := server.cfg.UpstreamURL
+		profile := server.cfg.Profile
+		if selectedKey != nil {
+			if selectedKey.BaseURL != "" {
+				if parsed, parseErr := url.Parse(selectedKey.BaseURL); parseErr == nil {
+					baseURL = parsed
+				}
+			}
+			if selectedKey.SpoofProfile != "" {
+				profile = selectedKey.SpoofProfile
+			}
+		}
+		req, err := http.NewRequestWithContext(attemptCtx, method, server.upstreamURLFor(baseURL, path), requestBody)
 		if err != nil {
 			cancel()
 			return nil, err
 		}
-		req.Header = spoofHeaders(server.cfg.Profile)
+		req.Header = spoofHeaders(profile)
 		if body != nil {
-			req.Header.Set("Content-Type", "application/json")
+			contentType := inbound.Get("Content-Type")
+			if contentType == "" {
+				contentType = "application/json"
+			}
+			req.Header.Set("Content-Type", contentType)
 		}
 		if stream {
 			req.Header.Set("Accept", "text/event-stream")
 		} else {
-			req.Header.Set("Accept", "application/json")
+			accept := inbound.Get("Accept")
+			if accept == "" {
+				accept = "application/json"
+			}
+			req.Header.Set("Accept", accept)
 		}
 		if authHeader != "" {
 			req.Header.Set("Authorization", authHeader)
@@ -855,7 +944,7 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 		if requestID := requestIDFromContext(ctx); requestID != "" {
 			req.Header.Set("X-Request-ID", requestID)
 		}
-		if cookie := server.cookies.header(); cookie != "" {
+		if cookie := server.cookies.header(); cookie != "" && baseURL.Host == server.cfg.UpstreamURL.Host {
 			req.Header.Set("Cookie", cookie)
 		}
 
@@ -962,9 +1051,11 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 			server.keys.recordResult(selectedKey.ID, resp.StatusCode, http.StatusText(resp.StatusCode), server.cfg.KeyCooldown)
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				keyID := selectedKey.ID
+				release := server.infra.acquireKey(ctx, keyID)
 				resp.Body = newUsageTrackingBody(resp.Body, func(input, output uint64) {
 					server.keys.recordUsage(keyID, input, output)
 				})
+				resp.Body = newReleaseBody(resp.Body, release)
 			}
 		}
 		return resp, nil
@@ -997,7 +1088,8 @@ func (server *proxyServer) selectAuthorization(inbound string, excluded map[stri
 }
 
 func (server *proxyServer) selectPoolAuthorization(excluded map[string]bool, model string) (string, *selectedAPIKey, error) {
-	key, err := server.keys.selectNextForModel(excluded, model)
+	loads := server.infra.keyLoads(context.Background(), server.keys.allKeyIDs())
+	key, err := server.keys.selectNextForModelLoads(excluded, model, loads)
 	if err != nil {
 		return "", nil, err
 	}
@@ -1107,14 +1199,41 @@ func Run() {
 		logEvent("error", "configuration_error", map[string]any{"error": err.Error()})
 		os.Exit(1)
 	}
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	infra, err := newInfrastructure(rootCtx, cfg)
+	if err != nil {
+		logEvent("error", "infrastructure_error", map[string]any{"error": err.Error()})
+		os.Exit(1)
+	}
+	defer infra.Close()
 	proxy := newProxyServer(cfg)
+	proxy.infra = infra
 	if proxy.keys.loadErr != nil {
 		logEvent("error", "key_store_load_error", map[string]any{"error": proxy.keys.loadErr.Error()})
 		os.Exit(1)
 	}
 
-	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	if cfg.StorageBackend == "postgres" {
+		state, stateErr := infra.loadGatewayState(rootCtx)
+		switch {
+		case stateErr == nil && len(state) > 0:
+			if err := proxy.keys.importBackup(state); err != nil {
+				logEvent("error", "postgres_state_import_failed", map[string]any{"error": err.Error()})
+				os.Exit(1)
+			}
+		case errors.Is(stateErr, sql.ErrNoRows):
+			if state, exportErr := proxy.keys.exportBackup(); exportErr == nil {
+				_ = infra.saveGatewayState(rootCtx, state)
+			}
+		case stateErr != nil:
+			logEvent("error", "postgres_state_load_failed", map[string]any{"error": stateErr.Error()})
+			os.Exit(1)
+		}
+		proxy.keys.setSaveHook(func(payload []byte) error {
+			return infra.saveGatewayState(context.Background(), payload)
+		})
+	}
 	go func() {
 		proxy.warmup(rootCtx)
 		ticker := time.NewTicker(cfg.WarmupInterval)

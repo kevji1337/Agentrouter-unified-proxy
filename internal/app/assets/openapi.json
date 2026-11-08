@@ -1,0 +1,19 @@
+{
+  "openapi":"3.1.0",
+  "info":{"title":"AgentRouter Unified Proxy","version":"3.0.0","description":"OpenAI-compatible self-hosted gateway. Use a managed arp_ client key as Bearer authentication."},
+  "servers":[{"url":"/v1"}],
+  "components":{"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer"}}},
+  "security":[{"bearerAuth":[]}],
+  "paths":{
+    "/chat/completions":{"post":{"summary":"Chat Completions converted through Responses API","responses":{"200":{"description":"Completion or SSE stream"}}}},
+    "/responses":{"post":{"summary":"Responses API","responses":{"200":{"description":"Response or SSE stream"}}}},
+    "/completions":{"post":{"summary":"Legacy text completions passthrough","responses":{"200":{"description":"Completion"}}}},
+    "/models":{"get":{"summary":"List models","responses":{"200":{"description":"Model list"}}}},
+    "/embeddings":{"post":{"summary":"Create embeddings","responses":{"200":{"description":"Embedding response"}}}},
+    "/moderations":{"post":{"summary":"Create moderation","responses":{"200":{"description":"Moderation response"}}}},
+    "/files":{"get":{"summary":"List files","responses":{"200":{"description":"Files"}}},"post":{"summary":"Upload file","responses":{"200":{"description":"File"}}}},
+    "/batches":{"get":{"summary":"List batches","responses":{"200":{"description":"Batches"}}},"post":{"summary":"Create batch","responses":{"200":{"description":"Batch"}}}},
+    "/images/generations":{"post":{"summary":"Generate images","responses":{"200":{"description":"Images"}}}},
+    "/audio/transcriptions":{"post":{"summary":"Transcribe audio","responses":{"200":{"description":"Transcription"}}}}
+  }
+}
