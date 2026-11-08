@@ -653,6 +653,9 @@ func (server *proxyServer) logging(next http.Handler) http.Handler {
 		}
 		duration := time.Since(start)
 		server.metrics.observe(r.URL.Path, status, duration)
+		if r.URL.Path == "/api/admin/logs" || r.URL.Path == "/health" || r.URL.Path == "/metrics" {
+			return
+		}
 		logEvent("info", "request_completed", map[string]any{
 			"request_id": requestIDFromContext(r.Context()), "method": r.Method,
 			"path": r.URL.Path, "status": status, "bytes": recorder.bytes,

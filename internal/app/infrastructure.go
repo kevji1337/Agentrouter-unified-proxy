@@ -100,6 +100,7 @@ func (infra *infrastructure) migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS gateway_state (id TEXT PRIMARY KEY, payload BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
 		`CREATE TABLE IF NOT EXISTS audit_events (id BIGSERIAL PRIMARY KEY, occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(), level TEXT NOT NULL, message TEXT NOT NULL, fields JSONB NOT NULL DEFAULT '{}'::jsonb)`,
 		`CREATE INDEX IF NOT EXISTS audit_events_occurred_at_idx ON audit_events (occurred_at DESC)`,
+		`DELETE FROM audit_events WHERE message='request_completed' AND fields->>'path' IN ('/api/admin/logs','/health','/metrics')`,
 	}
 	for _, statement := range statements {
 		if _, err := infra.db.ExecContext(ctx, statement); err != nil {
