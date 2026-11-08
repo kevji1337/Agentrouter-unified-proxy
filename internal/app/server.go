@@ -518,6 +518,9 @@ func (server *proxyServer) upstreamURL(path string) string {
 func (server *proxyServer) upstreamURLFor(base *url.URL, path string) string {
 	target := *base
 	pathOnly, rawQuery, _ := strings.Cut(path, "?")
+	if strings.HasSuffix(strings.TrimRight(target.Path, "/"), "/v1") && strings.HasPrefix(pathOnly, "/v1/") {
+		pathOnly = strings.TrimPrefix(pathOnly, "/v1")
+	}
 	target.Path = strings.TrimRight(target.Path, "/") + pathOnly
 	target.RawPath = ""
 	target.RawQuery = rawQuery

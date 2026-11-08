@@ -275,6 +275,14 @@ func TestAzureResourceMismatchRetriesStateless(t *testing.T) {
 	}
 }
 
+func TestUpstreamURLAcceptsBaseWithV1(t *testing.T) {
+	base, _ := url.Parse("https://example.test/v1")
+	proxy := newProxyServer(config{UpstreamURL: base, Profile: "generic"})
+	if got := proxy.upstreamURL("/v1/models"); got != "https://example.test/v1/models" {
+		t.Fatalf("upstream URL = %s", got)
+	}
+}
+
 func TestDirectResponsesAreSanitizedBeforeUpstream(t *testing.T) {
 	var calls atomic.Int32
 	seenBody := make(chan map[string]any, 1)
