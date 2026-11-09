@@ -110,7 +110,14 @@ func usageFromJSON(raw []byte) (uint64, uint64, bool) {
 	if !ok {
 		return 0, 0, false
 	}
-	return uint64Value(usage["input_tokens"]), uint64Value(usage["output_tokens"]), true
+	input, output := usage["input_tokens"], usage["output_tokens"]
+	if input == nil {
+		input = usage["prompt_tokens"]
+	}
+	if output == nil {
+		output = usage["completion_tokens"]
+	}
+	return uint64Value(input), uint64Value(output), true
 }
 
 func uint64Value(value any) uint64 {

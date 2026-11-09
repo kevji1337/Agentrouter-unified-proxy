@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -205,7 +204,8 @@ func (server *proxyServer) handleAdminStatus(w http.ResponseWriter, r *http.Requ
 	account := adminAccountFromContext(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "ok", "upstream": server.cfg.UpstreamURL.String(), "profile": server.cfg.Profile,
-		"waf_cookie": present, "waf_cookie_updated_at": optionalTime(updated),
+		"upstream_api_protocol": effectiveProtocol(server.cfg.UpstreamProtocol),
+		"waf_cookie":            present, "waf_cookie_updated_at": optionalTime(updated),
 		"selection_mode": server.currentKeySelectionMode(), "key_failover": server.cfg.KeyFailover,
 		"key_cooldown":        server.cfg.KeyCooldown.String(),
 		"key_health_interval": server.cfg.KeyHealthInterval.String(), "last_key_health_at": optionalTime(lastKeyHealth),
@@ -264,6 +264,10 @@ func (server *proxyServer) handleAdminKeys(w http.ResponseWriter, r *http.Reques
 		if input.Enabled != nil {
 			enabled = *input.Enabled
 		}
+		if err := server.validateAdminPolicy(input.Policy); err != nil {
+			writeAdminStoreError(w, err)
+			return
+		}
 		view, err := server.keys.addWithPolicy(input.Name, input.Key, enabled, input.Policy)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_key", err.Error())
@@ -299,6 +303,10 @@ func (server *proxyServer) handleAdminKey(w http.ResponseWriter, r *http.Request
 			}
 			var policy apiKeyPolicy
 			if err := decodeAdminJSON(w, r, &policy); err != nil {
+				return
+			}
+			if err := server.validateAdminPolicy(policy); err != nil {
+				writeAdminStoreError(w, err)
 				return
 			}
 			view, err := server.keys.updatePolicy(id, policy)
@@ -390,43 +398,61 @@ func (server *proxyServer) handleAdminKeyTest(w http.ResponseWriter, r *http.Req
 	}
 	started := time.Now()
 	status, message := server.probeAPIKey(r.Context(), *key)
-	server.keys.recordResult(id, status, message, server.cfg.KeyCooldown)
+	if !probeInconclusive(status) {
+		server.keys.recordResult(id, status, message, server.cfg.KeyCooldown)
+	}
 	result := map[string]any{
-		"ok": status >= 200 && status < 300, "status": status,
+		"ok": status >= 200 && status < 300, "status": status, "inconclusive": probeInconclusive(status),
 		"duration_ms": time.Since(started).Milliseconds(), "message": message,
 	}
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (server *proxyServer) validateAdminPolicy(policy apiKeyPolicy) error {
+	raw := policy.BaseURL
+	if strings.TrimSpace(raw) == "" {
+		raw = server.cfg.UpstreamURL.String()
+	}
+	_, err := server.validateUpstreamURL(raw)
+	return err
+}
+
+// Models is optional. Do not send a billed generation as a health probe.
+func probeInconclusive(status int) bool {
+	return status == http.StatusNotFound || status == http.StatusMethodNotAllowed || status == http.StatusNotImplemented
+}
+
 func (server *proxyServer) probeAPIKey(ctx context.Context, key selectedAPIKey) (int, string) {
-	baseURL := server.cfg.UpstreamURL
-	profile := server.cfg.Profile
-	if key.BaseURL != "" {
-		if parsed, err := url.Parse(key.BaseURL); err == nil {
-			baseURL = parsed
-		}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	baseURL, profile, _, err := server.upstreamSettings(&key)
+	if err != nil {
+		return http.StatusBadGateway, "invalid or disallowed upstream URL"
 	}
-	if key.SpoofProfile != "" {
-		profile = key.SpoofProfile
-	}
+	wafEnabled := server.usesWAFCookies(baseURL, profile)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.upstreamURLFor(baseURL, "/v1/models"), nil)
 	if err != nil {
-		return 0, err.Error()
+		return http.StatusBadGateway, "upstream request failed"
 	}
 	req.Header = spoofHeaders(profile)
 	req.Header.Set("Authorization", "Bearer "+key.Key)
-	if cookie := server.cookies.header(); cookie != "" && baseURL.Host == server.cfg.UpstreamURL.Host {
+	if cookie := server.cookies.header(); cookie != "" && wafEnabled {
 		req.Header.Set("Cookie", cookie)
 	}
 	resp, err := server.client.Do(req)
 	if err != nil {
-		return 0, err.Error()
+		return http.StatusBadGateway, "upstream connection failed"
 	}
 	defer resp.Body.Close()
-	server.cookies.capture(resp.Header)
+	if wafEnabled {
+		server.cookies.capture(resp.Header)
+	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return resp.StatusCode, "Key accepted"
+		return resp.StatusCode, "Key accepted by models endpoint; configured API protocol is unverified"
+	}
+	if probeInconclusive(resp.StatusCode) {
+		return resp.StatusCode, "Models endpoint unavailable; credential and configured API protocol are unverified"
 	}
 	return resp.StatusCode, http.StatusText(resp.StatusCode)
 }

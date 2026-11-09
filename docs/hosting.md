@@ -62,3 +62,12 @@ network or enforce an IP/mTLS policy at the reverse proxy.
 - Back up the named volumes before upgrades.
 - Monitor `docker compose logs`, `/health`, and `/metrics`.
 - Apply OS and container image updates regularly.
+
+## Multi-upstream security
+
+Configure each credential URL/protocol in `/admin`; see [multi-upstream.md](multi-upstream.md).
+For public deployments set `UPSTREAM_ALLOWED_ORIGINS` to all trusted origins,
+including AgentRouter if used. Add local origins explicitly when required.
+Enforce network egress/DNS restrictions against metadata access and rebinding;
+the origin allowlist alone is not a complete SSRF boundary. Use managed `arp_`
+client keys and `pool-only` to keep client and upstream credentials separate.

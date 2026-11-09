@@ -2,14 +2,19 @@
 
 Один Go-процесс объединяет:
 
-- OpenAI Chat Completions → Responses API;
+- multi-upstream OpenAI-compatible gateway: нативный Chat Completions и Responses;
+- OpenAI Chat Completions → Responses API adapter для Responses-only upstream;
 - обратную конвертацию обычных и SSE-ответов;
 - streaming tool calls, vision, structured output и reasoning;
 - spoof-профили `claude-code` / `codex`;
 - получение и ротацию WAF-cookie AgentRouter.
 
-Прокси всегда отправляет генерацию на `${UPSTREAM_URL}/v1/responses` и передаёт
-входящий `Authorization` без изменения.
+Каждый stored API key имеет собственные Base URL, protocol и policy. Chat-запрос
+идёт нативно на Chat upstream либо через существующий Responses adapter.
+Входящие credentials используются только с default upstream в legacy режиме.
+
+Подробная инструкция, ограничения безопасности, обновление и откат:
+[`docs/multi-upstream.md`](docs/multi-upstream.md).
 
 ## Возможности
 
@@ -100,7 +105,7 @@ http://127.0.0.1:8080/v1/responses
 
 | Метод | Путь | Назначение |
 |---|---|---|
-| `POST` | `/v1/chat/completions` | Chat → Responses → Chat conversion |
+| `POST` | `/v1/chat/completions` | Native Chat или Chat → Responses → Chat по protocol key |
 | `POST` | `/v1/responses` | Прозрачный Responses API proxy |
 | `GET` | `/v1/models`, `/models` | Upstream model discovery |
 | `GET` | `/health` | WAF-cookie и состояние сервиса |
@@ -128,7 +133,9 @@ http://127.0.0.1:8080/v1/responses
 | `UPSTREAM_URL` | `https://agentrouter.org` | Upstream origin без `/v1/responses` |
 | `LISTEN_ADDRESS` | `0.0.0.0` | Адрес внутри процесса/контейнера |
 | `PORT` | `8080` | Порт HTTP-сервера |
-| `SPOOF_PROFILE` | `claude-code` | `claude-code` или `codex` |
+| `SPOOF_PROFILE` | `claude-code` | `claude-code`, `codex` или `generic` для default upstream |
+| `UPSTREAM_API_PROTOCOL` | `responses` | Protocol default/inbound endpoint: `responses` или `chat-completions`; старые stored keys остаются Responses |
+| `UPSTREAM_ALLOWED_ORIGINS` | пусто | Production allowlist scheme+host+port через запятую; пусто = unrestricted |
 | `FORCE_SEQUENTIAL_TOOLS` | `true` | Один tool call за ход для совместимости с IDE |
 | `STATELESS_RESPONSES` | `true` | Удалять Azure resource-bound state до отправки Responses requests |
 | `PROXY_AUTH_TOKEN` | пусто | Требовать `X-Proxy-Token` на API и metrics |
@@ -143,7 +150,8 @@ http://127.0.0.1:8080/v1/responses
 | `RESPONSE_HEADER_TIMEOUT` | `5m` | Ожидание upstream response headers |
 | `SSE_IDLE_TIMEOUT` | `10m` | Максимальная пауза между байтами upstream body |
 | `WARMUP_INTERVAL` | `3m` | Период обновления WAF-cookie |
-| `MAX_RETRIES` | `2` | Число transport retries |
+| `MAX_RETRIES` | `2` | Максимум transport retries для GET/HEAD (и unsafe при opt-in) |
+| `RETRY_UNSAFE_REQUESTS` | `false` | Явно разрешить transport retries POST и других unsafe методов; возможен двойной биллинг |
 | `RETRY_DELAY` | `1s` | Базовый exponential backoff |
 | `RETRY_ON_5XX` | `false` | Retry HTTP 5xx |
 | `MAX_BODY_BYTES` | `20971520` | Лимит request/converted response |
@@ -216,13 +224,13 @@ docker run -d --name agentrouter-unified-proxy --restart unless-stopped `
 
 Откройте `http://127.0.0.1:8080/admin` и введите `ADMIN_TOKEN`. Панель позволяет:
 
-- добавлять ключи (enabled/disabled при создании);
+- добавлять credentials с названием, Base URL, API protocol, profile и enabled при создании;
 - включать, выключать и удалять;
-- проверять ключ через upstream `/v1/models`;
+- проверять подключение через optional upstream `/v1/models` (404/405/501 = inconclusive, не failure);
 - задавать priority, weight и model allowlist;
 - ограничивать daily requests и monthly budget;
 - учитывать input/output tokens и стоимость по настраиваемым тарифам;
-- видеть masked credential, usage, failures, cooldown и last used;
+- видеть upstream URL/protocol, masked credential, usage, failures, cooldown и last used;
 - просматривать live audit/request events и usage charts;
 - экспортировать и импортировать encrypted backup;
 - переключать routing policy без перезапуска;
@@ -246,7 +254,7 @@ Authorization: Bearer arp_...
 ```
 
 Прокси проверяет его локально, удаляет клиентский credential перед upstream и
-подставляет AgentRouter key из encrypted pool. Client keys можно раскрывать,
+подставляет credential выбранного upstream из encrypted pool. Client keys можно раскрывать,
 копировать, выключать и удалять; usage/last-used отображаются в панели.
 
 Как только существует хотя бы один enabled client key, неизвестные Bearer keys
@@ -260,10 +268,13 @@ Authorization: Bearer arp_...
 - `pool-first` — сначала enabled key из pool, затем входящий ключ;
 - `pool-only` — входящий `Authorization` игнорируется, используется только pool.
 
-В pool используется round-robin. При `KEY_FAILOVER=true` ответы 401, 402 и 429
-переключают текущий запрос на следующий enabled key.
+В pool используется weighted round-robin. При `KEY_FAILOVER=true` ответы
+401/402/429 переключают текущий запрос на следующий совместимый key, включая
+другой Base URL/protocol. Исходный JSON готовится заново для каждой попытки.
+`/v1/responses` не направляется на Chat-only providers; отсутствие подходящего
+upstream возвращает `503 no_compatible_upstream`.
 
-Ключи сначала фильтруются по enabled/cooldown/model/limits, затем выбирается
+Ключи сначала фильтруются по enabled/cooldown/model/protocol/limits, затем выбирается
 максимальный priority, а среди ключей одного priority применяется weighted
 round-robin. Тарифы задаются в USD за миллион input/output tokens.
 
@@ -307,6 +318,7 @@ curl.exe http://127.0.0.1:8080/v1/models `
 ```bash
 gofmt -w cmd/proxy/*.go internal/app/*.go
 go vet ./...
+go test ./...
 go test -race ./...
 docker build -t agentrouter-unified-proxy .
 ```
@@ -349,7 +361,7 @@ ALERT_COOLDOWN=5m
 Telegram получает deduplicated alerts о key failover, WAF/Azure retries,
 отсутствии доступных ключей и недоступности PostgreSQL/Redis.
 
-Каждый upstream key может иметь собственные `base_url`, `spoof_profile`, model
+Каждый upstream key может иметь собственные `base_url`, `api_protocol`, `spoof_profile`, model
 allowlist, priority, weight и limits. Это позволяет объединять AgentRouter и
 другие OpenAI-compatible endpoints в одном gateway.
 

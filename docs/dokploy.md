@@ -102,9 +102,12 @@ reverse proxy should reach it.
 
 ## 5. First login
 
-Open `/admin`, enter `ADMIN_TOKEN`, and add AgentRouter keys. The browser keeps
-the admin token only in `sessionStorage`; the server never returns full stored
-keys.
+Open `/admin`, enter `ADMIN_TOKEN`, and add upstream credentials with their
+Base URL and API protocol. AgentRouter defaults to Responses; custom providers
+can use native Chat Completions and generic profile. See [multi-upstream.md](multi-upstream.md)
+for routing, production origin restrictions, compatibility and safe rollback.
+The browser keeps the admin session ID in `sessionStorage`; the server never
+returns full stored upstream keys.
 
 ## Updating
 

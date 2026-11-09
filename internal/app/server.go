@@ -28,34 +28,37 @@ import (
 const maxRequestBytes = 20 << 20
 
 type config struct {
-	UpstreamURL           *url.URL
-	ListenAddress         string
-	Port                  int
-	Profile               string
-	ProxyAuthToken        string
-	ResponseHeaderTimeout time.Duration
-	SSEIdleTimeout        time.Duration
-	WarmupInterval        time.Duration
-	RetryDelay            time.Duration
-	MaxRetries            int
-	RetryOn5xx            bool
-	MaxBodyBytes          int64
-	ForceSequentialTools  bool
-	StatelessResponses    bool
-	AdminToken            string
-	AdminAccounts         []adminAccount
-	KeyStorePath          string
-	KeyStoreSecret        string
-	KeySelectionMode      string
-	KeyFailover           bool
-	KeyCooldown           time.Duration
-	KeyHealthInterval     time.Duration
-	DatabaseURL           string
-	RedisURL              string
-	StorageBackend        string
-	TelegramBotToken      string
-	TelegramChatID        string
-	AlertCooldown         time.Duration
+	UpstreamURL            *url.URL
+	UpstreamProtocol       string
+	AllowedUpstreamOrigins []string
+	RetryUnsafeRequests    bool
+	ListenAddress          string
+	Port                   int
+	Profile                string
+	ProxyAuthToken         string
+	ResponseHeaderTimeout  time.Duration
+	SSEIdleTimeout         time.Duration
+	WarmupInterval         time.Duration
+	RetryDelay             time.Duration
+	MaxRetries             int
+	RetryOn5xx             bool
+	MaxBodyBytes           int64
+	ForceSequentialTools   bool
+	StatelessResponses     bool
+	AdminToken             string
+	AdminAccounts          []adminAccount
+	KeyStorePath           string
+	KeyStoreSecret         string
+	KeySelectionMode       string
+	KeyFailover            bool
+	KeyCooldown            time.Duration
+	KeyHealthInterval      time.Duration
+	DatabaseURL            string
+	RedisURL               string
+	StorageBackend         string
+	TelegramBotToken       string
+	TelegramChatID         string
+	AlertCooldown          time.Duration
 }
 
 func loadConfig() (config, error) {
@@ -63,12 +66,27 @@ func loadConfig() (config, error) {
 		return config{}, fmt.Errorf("load .env: %w", err)
 	}
 	rawURL := envDefault("UPSTREAM_URL", "https://agentrouter.org")
-	upstream, err := url.Parse(strings.TrimRight(rawURL, "/"))
-	if err != nil || upstream.Host == "" || (upstream.Scheme != "http" && upstream.Scheme != "https") {
-		return config{}, fmt.Errorf("UPSTREAM_URL must be an absolute http(s) URL")
+	upstream, err := parseUpstreamURL(rawURL)
+	if err != nil {
+		return config{}, fmt.Errorf("UPSTREAM_URL: %w", err)
 	}
-	if upstream.RawQuery != "" || upstream.Fragment != "" {
-		return config{}, fmt.Errorf("UPSTREAM_URL must not contain a query or fragment")
+	upstreamProtocol := envDefault("UPSTREAM_API_PROTOCOL", protocolResponses)
+	if !validProtocol(upstreamProtocol) {
+		return config{}, errors.New("UPSTREAM_API_PROTOCOL must be responses or chat-completions")
+	}
+	var allowedOrigins []string
+	if raw := strings.TrimSpace(os.Getenv("UPSTREAM_ALLOWED_ORIGINS")); raw != "" {
+		for _, entry := range strings.Split(raw, ",") {
+			base, err := parseUpstreamURL(entry)
+			if err != nil || base.Path != "" {
+				return config{}, errors.New("UPSTREAM_ALLOWED_ORIGINS must contain comma-separated http(s) origins without paths")
+			}
+			allowedOrigins = append(allowedOrigins, upstreamOrigin(base))
+		}
+	}
+	retryUnsafe, err := strconv.ParseBool(envDefault("RETRY_UNSAFE_REQUESTS", "false"))
+	if err != nil {
+		return config{}, errors.New("RETRY_UNSAFE_REQUESTS must be true or false")
 	}
 	port, err := strconv.Atoi(envDefault("PORT", "8080"))
 	if err != nil || port < 1 || port > 65535 {
@@ -78,8 +96,8 @@ func loadConfig() (config, error) {
 	if profile == "claude" {
 		profile = "claude-code"
 	}
-	if profile != "claude-code" && profile != "codex" {
-		return config{}, fmt.Errorf("SPOOF_PROFILE must be claude-code or codex")
+	if profile != "claude-code" && profile != "codex" && profile != "generic" {
+		return config{}, fmt.Errorf("SPOOF_PROFILE must be claude-code, codex, or generic")
 	}
 	responseTimeout, err := envDuration("RESPONSE_HEADER_TIMEOUT", 5*time.Minute)
 	if err != nil {
@@ -151,8 +169,9 @@ func loadConfig() (config, error) {
 		keyStoreSecret = adminToken
 	}
 	return config{
-		UpstreamURL: upstream, ListenAddress: envDefault("LISTEN_ADDRESS", "0.0.0.0"),
-		Port: port, Profile: profile, ProxyAuthToken: strings.TrimSpace(os.Getenv("PROXY_AUTH_TOKEN")),
+		UpstreamURL: upstream, UpstreamProtocol: upstreamProtocol, AllowedUpstreamOrigins: allowedOrigins, RetryUnsafeRequests: retryUnsafe,
+		ListenAddress: envDefault("LISTEN_ADDRESS", "0.0.0.0"),
+		Port:          port, Profile: profile, ProxyAuthToken: strings.TrimSpace(os.Getenv("PROXY_AUTH_TOKEN")),
 		ResponseHeaderTimeout: responseTimeout, SSEIdleTimeout: sseTimeout,
 		WarmupInterval: warmupInterval, RetryDelay: retryDelay, MaxRetries: maxRetries,
 		RetryOn5xx: retryOn5xx, MaxBodyBytes: maxBodyBytes, ForceSequentialTools: forceSequentialTools,
@@ -500,7 +519,9 @@ func (server *proxyServer) probeAllKeys(ctx context.Context) {
 			return
 		}
 		status, message := server.probeAPIKey(ctx, key)
-		server.keys.recordResult(key.ID, status, message, server.cfg.KeyCooldown)
+		if !probeInconclusive(status) {
+			server.keys.recordResult(key.ID, status, message, server.cfg.KeyCooldown)
+		}
 	}
 	now := time.Now().UTC()
 	server.lastKeyHealth.Store(now)
@@ -521,8 +542,15 @@ func (server *proxyServer) upstreamURLFor(base *url.URL, path string) string {
 	if strings.HasSuffix(strings.TrimRight(target.Path, "/"), "/v1") && strings.HasPrefix(pathOnly, "/v1/") {
 		pathOnly = strings.TrimPrefix(pathOnly, "/v1")
 	}
-	target.Path = strings.TrimRight(target.Path, "/") + pathOnly
-	target.RawPath = ""
+	// Preserve escaped separators in provider-specific prefixes as well.
+	escapedPath := strings.TrimRight(target.EscapedPath(), "/") + pathOnly
+	decodedPath, err := url.PathUnescape(escapedPath)
+	if err != nil {
+		decodedPath = strings.TrimRight(target.Path, "/") + pathOnly
+		escapedPath = ""
+	}
+	target.Path = decodedPath
+	target.RawPath = escapedPath
 	target.RawQuery = rawQuery
 	return target.String()
 }
@@ -592,6 +620,8 @@ func (server *proxyServer) authenticate(next http.Handler) http.Handler {
 			clone := r.Clone(r.Context())
 			clone.Header = r.Header.Clone()
 			clone.Header.Del("Authorization") // never forward proxy client credentials upstream
+			clone.Header.Del("X-Api-Key")
+			clone = clone.WithContext(context.WithValue(clone.Context(), gatewayClientContextKey{}, true))
 			r = clone
 		}
 		next.ServeHTTP(w, r)
@@ -756,26 +786,41 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 	if err != nil {
 		return
 	}
-	converted, meta, err := convertChatRequest(body)
+	obj, err := decodeObject(body)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON object")
 		return
 	}
-	if server.cfg.ForceSequentialTools {
-		converted, err = enforceSequentialTools(converted)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "conversion_error", err.Error())
-			return
-		}
-		meta.ForceSequentialTools = true
+	model, _ := obj["model"].(string)
+	if strings.TrimSpace(model) == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "model must be a non-empty string")
+		return
 	}
-	meta.RequestID = requestIDFromContext(r.Context())
-	resp, err := server.doUpstream(r.Context(), r.Header, http.MethodPost, "/v1/responses", converted, meta.Stream)
+	if _, ok := obj["messages"].([]any); !ok {
+		writeError(w, http.StatusBadRequest, "invalid_request", "messages must be an array")
+		return
+	}
+	stream, _ := obj["stream"].(bool)
+	resp, convertedMeta, err := server.doUpstreamWithMeta(r.Context(), r.Header, http.MethodPost, "/v1/chat/completions", body, stream)
 	if err != nil {
 		writeUpstreamError(w, err)
 		return
 	}
 	defer resp.Body.Close()
+	if convertedMeta == nil {
+		copyResponseHeaders(w.Header(), resp.Header)
+		w.WriteHeader(resp.StatusCode)
+		if isEventStream(resp.Header) {
+			server.metrics.activeSSE.Add(1)
+			defer server.metrics.activeSSE.Add(-1)
+			streamCopy(w, resp.Body)
+		} else {
+			_, _ = io.Copy(w, resp.Body)
+		}
+		return
+	}
+	meta := *convertedMeta
+	meta.RequestID = requestIDFromContext(r.Context())
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		copyResponseHeaders(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
@@ -881,6 +926,12 @@ func readRequestBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byt
 }
 
 func (server *proxyServer) warmup(ctx context.Context) bool {
+	if server.cfg.Profile == "generic" {
+		return false
+	}
+	if _, err := server.validateUpstreamURL(server.cfg.UpstreamURL.String()); err != nil {
+		return false
+	}
 	ok := server.cookies.warmup(ctx, server.cfg.UpstreamURL)
 	if ok {
 		server.metrics.wafRefreshes.Add(1)
@@ -888,41 +939,71 @@ func (server *proxyServer) warmup(ctx context.Context) bool {
 	return ok
 }
 
+type prefixedResponseBody struct {
+	io.Reader
+	closer io.Closer
+}
+
+func (body *prefixedResponseBody) Close() error { return body.closer.Close() }
+
+type gatewayClientContextKey struct{}
+
 func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, method, path string, body []byte, stream bool) (*http.Response, error) {
+	resp, _, err := server.doUpstreamWithMeta(ctx, inbound, method, path, body, stream)
+	return resp, err
+}
+
+func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.Header, method, path string, body []byte, stream bool) (*http.Response, *requestMeta, error) {
 	retries := 0
 	wafRetried := false
 	resourceRetried := false
 	excludedKeys := make(map[string]bool)
+	// Bound failover even if administrators add keys during this request.
+	remainingFailovers := max(0, server.keys.status().Total-1)
 	model := modelFromRequestBody(body)
-	authHeader, selectedKey, err := server.selectAuthorization(inbound.Get("Authorization"), excludedKeys, model)
+	requiredProtocol := ""
+	if path == "/v1/responses" {
+		requiredProtocol = protocolResponses
+	}
+	inboundAuth := inbound.Get("Authorization")
+	if inboundAuth == "" && inbound.Get("X-Api-Key") != "" {
+		inboundAuth = "Bearer " + inbound.Get("X-Api-Key")
+	}
+	if client, _ := ctx.Value(gatewayClientContextKey{}).(bool); client {
+		inboundAuth = ""
+	}
+	authHeader, selectedKey, err := server.selectAuthorizationFor(inboundAuth, excludedKeys, model, requiredProtocol)
+	if errors.Is(err, errNoEnabledAPIKeys) && requiredProtocol != "" {
+		err = errNoCompatibleUpstream
+	}
+	if client, _ := ctx.Value(gatewayClientContextKey{}).(bool); client && selectedKey == nil && err == nil {
+		err = errNoEnabledAPIKeys
+	}
 	if err != nil {
 		if errors.Is(err, errNoEnabledAPIKeys) {
 			logEvent("error", "no_available_api_keys", map[string]any{"model": model})
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	for {
+		baseURL, profile, protocol, settingsErr := server.upstreamSettings(selectedKey)
+		if settingsErr != nil {
+			return nil, nil, settingsErr
+		}
+		attemptPath, attemptBody, meta, prepareErr := server.prepareUpstream(path, body, protocol)
+		if prepareErr != nil {
+			return nil, nil, prepareErr
+		}
+		wafEnabled := server.usesWAFCookies(baseURL, profile)
 		var requestBody io.Reader
-		if body != nil {
-			requestBody = bytes.NewReader(body)
+		if attemptBody != nil {
+			requestBody = bytes.NewReader(attemptBody)
 		}
 		attemptCtx, cancel := context.WithCancel(ctx)
-		baseURL := server.cfg.UpstreamURL
-		profile := server.cfg.Profile
-		if selectedKey != nil {
-			if selectedKey.BaseURL != "" {
-				if parsed, parseErr := url.Parse(selectedKey.BaseURL); parseErr == nil {
-					baseURL = parsed
-				}
-			}
-			if selectedKey.SpoofProfile != "" {
-				profile = selectedKey.SpoofProfile
-			}
-		}
-		req, err := http.NewRequestWithContext(attemptCtx, method, server.upstreamURLFor(baseURL, path), requestBody)
+		req, err := http.NewRequestWithContext(attemptCtx, method, server.upstreamURLFor(baseURL, attemptPath), requestBody)
 		if err != nil {
 			cancel()
-			return nil, err
+			return nil, nil, err
 		}
 		req.Header = spoofHeaders(profile)
 		if body != nil {
@@ -944,13 +1025,13 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 		if authHeader != "" {
 			req.Header.Set("Authorization", authHeader)
 		}
-		if key := inbound.Get("X-Api-Key"); key != "" {
+		if key := inbound.Get("X-Api-Key"); key != "" && selectedKey == nil {
 			req.Header.Set("X-Api-Key", key)
 		}
 		if requestID := requestIDFromContext(ctx); requestID != "" {
 			req.Header.Set("X-Request-ID", requestID)
 		}
-		if cookie := server.cookies.header(); cookie != "" && baseURL.Host == server.cfg.UpstreamURL.Host {
+		if cookie := server.cookies.header(); cookie != "" && wafEnabled {
 			req.Header.Set("Cookie", cookie)
 		}
 
@@ -958,29 +1039,31 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 		if err != nil {
 			cancel()
 			if ctx.Err() != nil {
-				return nil, ctx.Err()
+				return nil, nil, ctx.Err()
 			}
-			if retries < server.cfg.MaxRetries {
+			if (method == http.MethodGet || method == http.MethodHead || server.cfg.RetryUnsafeRequests) && retries < server.cfg.MaxRetries {
 				retries++
 				server.metrics.retries.Add(1)
 				logEvent("warn", "upstream_transport_retry", map[string]any{
 					"request_id": requestIDFromContext(ctx), "attempt": retries,
-					"max_retries": server.cfg.MaxRetries, "error": err.Error(),
+					"max_retries": server.cfg.MaxRetries,
 				})
 				if !sleepContext(ctx, server.cfg.RetryDelay*time.Duration(1<<(retries-1))) {
-					return nil, ctx.Err()
+					return nil, nil, ctx.Err()
 				}
 				continue
 			}
-			return nil, err
+			return nil, nil, err
 		}
 		resp.Body = newIdleTimeoutBody(resp.Body, cancel, server.cfg.SSEIdleTimeout)
-		server.cookies.capture(resp.Header)
-		if !wafRetried && (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusMethodNotAllowed) {
+		if wafEnabled {
+			server.cookies.capture(resp.Header)
+		}
+		if wafEnabled && !wafRetried && (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusMethodNotAllowed) {
 			raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 			_ = resp.Body.Close()
 			if readErr != nil {
-				return nil, readErr
+				return nil, nil, readErr
 			}
 			if isWafBlock(resp.StatusCode, raw) {
 				wafRetried = true
@@ -993,19 +1076,21 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 			}
 			resp.Body = io.NopCloser(bytes.NewReader(raw))
 		}
-		if !resourceRetried && resp.StatusCode == http.StatusBadRequest && body != nil {
+		if attemptPath == "/v1/responses" && !resourceRetried && resp.StatusCode == http.StatusBadRequest && attemptBody != nil {
 			raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 			_ = resp.Body.Close()
 			if readErr != nil {
-				return nil, readErr
+				return nil, nil, readErr
 			}
 			if isForeignAzureResourceError(resp.StatusCode, raw) {
-				sanitized, changed, sanitizeErr := sanitizeResourceBoundState(body)
+				sanitized, changed, sanitizeErr := sanitizeResourceBoundState(attemptBody)
 				if sanitizeErr != nil {
-					return nil, sanitizeErr
+					return nil, nil, sanitizeErr
 				}
 				if changed {
-					body = sanitized
+					if path == "/v1/responses" {
+						body = sanitized
+					}
 					resourceRetried = true
 					server.metrics.retries.Add(1)
 					logEvent("warn", "azure_resource_state_retry", map[string]any{
@@ -1016,18 +1101,20 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 			}
 			resp.Body = io.NopCloser(bytes.NewReader(raw))
 		}
-		if selectedKey != nil && server.cfg.KeyFailover &&
+		if selectedKey != nil && server.cfg.KeyFailover && remainingFailovers > 0 &&
 			(resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusPaymentRequired || resp.StatusCode == http.StatusTooManyRequests) {
 			raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-			_ = resp.Body.Close()
 			if readErr != nil {
-				return nil, readErr
+				_ = resp.Body.Close()
+				return nil, nil, readErr
 			}
 			failedKeyID := selectedKey.ID
 			server.keys.recordResult(failedKeyID, resp.StatusCode, http.StatusText(resp.StatusCode), server.cfg.KeyCooldown)
 			excludedKeys[failedKeyID] = true
-			nextAuth, nextKey, selectErr := server.selectPoolAuthorization(excludedKeys, model)
+			nextAuth, nextKey, selectErr := server.selectPoolAuthorizationFor(excludedKeys, model, requiredProtocol)
 			if selectErr == nil {
+				_ = resp.Body.Close()
+				remainingFailovers--
 				authHeader, selectedKey = nextAuth, nextKey
 				server.metrics.retries.Add(1)
 				logEvent("warn", "api_key_failover", map[string]any{
@@ -1037,7 +1124,8 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 				continue
 			}
 			selectedKey = nil // failure already recorded; avoid counting it twice
-			resp.Body = io.NopCloser(bytes.NewReader(raw))
+			// Keep the unread remainder: native error bodies must not be truncated.
+			resp.Body = &prefixedResponseBody{Reader: io.MultiReader(bytes.NewReader(raw), resp.Body), closer: resp.Body}
 		}
 		if server.cfg.RetryOn5xx && resp.StatusCode >= 500 && resp.StatusCode <= 599 && retries < server.cfg.MaxRetries {
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
@@ -1049,7 +1137,7 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 				"status": resp.StatusCode, "max_retries": server.cfg.MaxRetries,
 			})
 			if !sleepContext(ctx, server.cfg.RetryDelay*time.Duration(1<<(retries-1))) {
-				return nil, ctx.Err()
+				return nil, nil, ctx.Err()
 			}
 			continue
 		}
@@ -1064,38 +1152,39 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 				resp.Body = newReleaseBody(resp.Body, release)
 			}
 		}
-		return resp, nil
+		return resp, meta, nil
 	}
 }
 
-func (server *proxyServer) selectAuthorization(inbound string, excluded map[string]bool, model string) (string, *selectedAPIKey, error) {
+func (server *proxyServer) selectAuthorizationFor(inbound string, excluded map[string]bool, model, requiredProtocol string) (string, *selectedAPIKey, error) {
+	inboundCompatible := requiredProtocol == "" || effectiveProtocol(server.cfg.UpstreamProtocol) == requiredProtocol
 	switch server.currentKeySelectionMode() {
 	case "pool-only":
-		return server.selectPoolAuthorization(excluded, model)
+		return server.selectPoolAuthorizationFor(excluded, model, requiredProtocol)
 	case "pool-first":
-		auth, key, err := server.selectPoolAuthorization(excluded, model)
+		auth, key, err := server.selectPoolAuthorizationFor(excluded, model, requiredProtocol)
 		if err == nil {
 			return auth, key, nil
 		}
-		if inbound != "" {
+		if inbound != "" && inboundCompatible {
 			return inbound, nil, nil
 		}
 		return "", nil, err
 	default:
-		if inbound != "" {
+		if inbound != "" && inboundCompatible {
 			return inbound, nil, nil
 		}
-		auth, key, err := server.selectPoolAuthorization(excluded, model)
-		if errors.Is(err, errNoEnabledAPIKeys) {
+		auth, key, err := server.selectPoolAuthorizationFor(excluded, model, requiredProtocol)
+		if errors.Is(err, errNoEnabledAPIKeys) && server.keys.status().Total == 0 && inboundCompatible {
 			return "", nil, nil
 		}
 		return auth, key, err
 	}
 }
 
-func (server *proxyServer) selectPoolAuthorization(excluded map[string]bool, model string) (string, *selectedAPIKey, error) {
+func (server *proxyServer) selectPoolAuthorizationFor(excluded map[string]bool, model, requiredProtocol string) (string, *selectedAPIKey, error) {
 	loads := server.infra.keyLoads(context.Background(), server.keys.allKeyIDs())
-	key, err := server.keys.selectNextForModelLoads(excluded, model, loads)
+	key, err := server.keys.selectNextCompatible(excluded, model, loads, requiredProtocol)
 	if err != nil {
 		return "", nil, err
 	}
@@ -1195,7 +1284,15 @@ func writeUpstreamError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusServiceUnavailable, "no_enabled_api_keys", "no enabled API keys are available in the configured pool")
 		return
 	}
-	writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
+	if errors.Is(err, errNoCompatibleUpstream) {
+		writeError(w, http.StatusServiceUnavailable, "no_compatible_upstream", err.Error())
+		return
+	}
+	if errors.Is(err, errInvalidUpstreamRequest) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	writeError(w, http.StatusBadGateway, "upstream_error", "upstream request failed")
 }
 
 func Run() {

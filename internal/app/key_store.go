@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -85,6 +84,7 @@ type persistedAPIKey struct {
 	MonthlySpendUSD      float64   `json:"monthly_spend_usd,omitempty"`
 	InputTokens          uint64    `json:"input_tokens,omitempty"`
 	OutputTokens         uint64    `json:"output_tokens,omitempty"`
+	APIProtocol          string    `json:"api_protocol,omitempty"`
 	BaseURL              string    `json:"base_url,omitempty"`
 	SpoofProfile         string    `json:"spoof_profile,omitempty"`
 }
@@ -112,6 +112,7 @@ type apiKeyView struct {
 	OutputCostPerMillion float64    `json:"output_cost_per_million"`
 	InputTokens          uint64     `json:"input_tokens"`
 	OutputTokens         uint64     `json:"output_tokens"`
+	APIProtocol          string     `json:"api_protocol"`
 	BaseURL              string     `json:"base_url,omitempty"`
 	SpoofProfile         string     `json:"spoof_profile,omitempty"`
 }
@@ -124,6 +125,7 @@ type apiKeyPolicy struct {
 	MonthlyBudgetUSD     float64  `json:"monthly_budget_usd"`
 	InputCostPerMillion  float64  `json:"input_cost_per_million"`
 	OutputCostPerMillion float64  `json:"output_cost_per_million"`
+	APIProtocol          string   `json:"api_protocol"`
 	BaseURL              string   `json:"base_url"`
 	SpoofProfile         string   `json:"spoof_profile"`
 }
@@ -133,6 +135,7 @@ type selectedAPIKey struct {
 	Name         string
 	Key          string
 	BaseURL      string
+	APIProtocol  string
 	SpoofProfile string
 }
 
@@ -285,6 +288,9 @@ func (store *apiKeyStore) decrypt(record persistedAPIKey) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if len(nonce) != store.aead.NonceSize() {
+		return "", errors.New("invalid encrypted key nonce")
+	}
 	plain, err := store.aead.Open(nil, nonce, ciphertext, nil)
 	return string(plain), err
 }
@@ -297,6 +303,9 @@ func (store *apiKeyStore) decryptClientKey(record persistedClientKey) (string, e
 	ciphertext, err := base64.RawStdEncoding.DecodeString(record.Ciphertext)
 	if err != nil {
 		return "", err
+	}
+	if len(nonce) != store.aead.NonceSize() {
+		return "", errors.New("invalid encrypted client key nonce")
 	}
 	plain, err := store.aead.Open(nil, nonce, ciphertext, nil)
 	return string(plain), err
@@ -346,6 +355,7 @@ func (store *apiKeyStore) addWithPolicy(name, key string, enabled bool, policy a
 		DailyRequestLimit: policy.DailyRequestLimit, MonthlyBudgetUSD: policy.MonthlyBudgetUSD,
 		InputCostPerMillion: policy.InputCostPerMillion, OutputCostPerMillion: policy.OutputCostPerMillion,
 		BaseURL: strings.TrimRight(strings.TrimSpace(policy.BaseURL), "/"), SpoofProfile: strings.ToLower(strings.TrimSpace(policy.SpoofProfile)),
+		APIProtocol: policy.APIProtocol,
 	}
 	if err := validateKeyPolicy(record); err != nil {
 		return apiKeyView{}, err
@@ -459,6 +469,10 @@ func (store *apiKeyStore) updatePolicy(id string, policy apiKeyPolicy) (apiKeyVi
 	store.keys[index].OutputCostPerMillion = policy.OutputCostPerMillion
 	store.keys[index].BaseURL = strings.TrimRight(strings.TrimSpace(policy.BaseURL), "/")
 	store.keys[index].SpoofProfile = strings.ToLower(strings.TrimSpace(policy.SpoofProfile))
+	// Old clients do not send api_protocol: preserve the existing selection.
+	if policy.APIProtocol != "" {
+		store.keys[index].APIProtocol = policy.APIProtocol
+	}
 	if err := validateKeyPolicy(store.keys[index]); err != nil {
 		store.keys[index] = old
 		return apiKeyView{}, err
@@ -503,6 +517,10 @@ func (store *apiKeyStore) selectNextForModel(excluded map[string]bool, model str
 }
 
 func (store *apiKeyStore) selectNextForModelLoads(excluded map[string]bool, model string, loads map[string]int64) (*selectedAPIKey, error) {
+	return store.selectNextCompatible(excluded, model, loads, "")
+}
+
+func (store *apiKeyStore) selectNextCompatible(excluded map[string]bool, model string, loads map[string]int64, requiredProtocol string) (*selectedAPIKey, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.loadErr != nil {
@@ -517,7 +535,7 @@ func (store *apiKeyStore) selectNextForModelLoads(excluded map[string]bool, mode
 	for index := range store.keys {
 		record := &store.keys[index]
 		resetUsagePeriods(record, now)
-		if !keyAvailable(*record, excluded, model, now) {
+		if !keyAvailable(*record, excluded, model, now) || (requiredProtocol != "" && effectiveProtocol(record.APIProtocol) != requiredProtocol) {
 			continue
 		}
 		if record.Priority > highestPriority {
@@ -571,7 +589,7 @@ func (store *apiKeyStore) selectNextForModelLoads(excluded map[string]bool, mode
 	if err := store.saveLocked(); err != nil {
 		return nil, err
 	}
-	return &selectedAPIKey{ID: record.ID, Name: record.Name, Key: plain, BaseURL: record.BaseURL, SpoofProfile: record.SpoofProfile}, nil
+	return &selectedAPIKey{ID: record.ID, Name: record.Name, Key: plain, BaseURL: record.BaseURL, SpoofProfile: record.SpoofProfile, APIProtocol: effectiveProtocol(record.APIProtocol)}, nil
 }
 
 func (store *apiKeyStore) allKeyIDs() []string {
@@ -595,7 +613,7 @@ func (store *apiKeyStore) byID(id string) (*selectedAPIKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &selectedAPIKey{ID: id, Name: store.keys[index].Name, Key: plain, BaseURL: store.keys[index].BaseURL, SpoofProfile: store.keys[index].SpoofProfile}, nil
+	return &selectedAPIKey{ID: id, Name: store.keys[index].Name, Key: plain, BaseURL: store.keys[index].BaseURL, SpoofProfile: store.keys[index].SpoofProfile, APIProtocol: effectiveProtocol(store.keys[index].APIProtocol)}, nil
 }
 
 func (store *apiKeyStore) recordResult(id string, status int, message string, cooldown time.Duration) {
@@ -654,7 +672,7 @@ func (store *apiKeyStore) enabledForProbe() ([]selectedAPIKey, error) {
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, selectedAPIKey{ID: record.ID, Name: record.Name, Key: plain, BaseURL: record.BaseURL, SpoofProfile: record.SpoofProfile})
+		result = append(result, selectedAPIKey{ID: record.ID, Name: record.Name, Key: plain, BaseURL: record.BaseURL, SpoofProfile: record.SpoofProfile, APIProtocol: effectiveProtocol(record.APIProtocol)})
 	}
 	return result, nil
 }
@@ -683,6 +701,9 @@ func (store *apiKeyStore) importBackup(raw []byte) error {
 	}
 	for i := range file.Keys {
 		normalizeKeyPolicy(&file.Keys[i])
+		if err := validateKeyPolicy(file.Keys[i]); err != nil {
+			return err
+		}
 		if _, err := store.decrypt(file.Keys[i]); err != nil {
 			return fmt.Errorf("backup cannot be decrypted with current KEY_STORE_SECRET: %w", err)
 		}
@@ -901,7 +922,7 @@ func keyView(record persistedAPIKey) apiKeyView {
 		MonthlyBudgetUSD: record.MonthlyBudgetUSD, MonthlySpendUSD: record.MonthlySpendUSD,
 		InputCostPerMillion: record.InputCostPerMillion, OutputCostPerMillion: record.OutputCostPerMillion,
 		InputTokens: record.InputTokens, OutputTokens: record.OutputTokens,
-		BaseURL: record.BaseURL, SpoofProfile: record.SpoofProfile,
+		BaseURL: record.BaseURL, SpoofProfile: record.SpoofProfile, APIProtocol: effectiveProtocol(record.APIProtocol),
 	}
 	if !record.LastUsed.IsZero() {
 		lastUsed := record.LastUsed
@@ -926,6 +947,9 @@ func normalizeKeyPolicy(record *persistedAPIKey) {
 }
 
 func validateKeyPolicy(record persistedAPIKey) error {
+	if !validProtocol(record.APIProtocol) {
+		return errors.New("api_protocol must be responses or chat-completions")
+	}
 	if record.Weight < 0 || record.Weight > 100 {
 		return errors.New("weight must be between 1 and 100")
 	}
@@ -936,9 +960,8 @@ func validateKeyPolicy(record persistedAPIKey) error {
 		return errors.New("limits and prices cannot be negative")
 	}
 	if record.BaseURL != "" {
-		parsed, err := url.Parse(record.BaseURL)
-		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-			return errors.New("base_url must be an absolute http(s) URL")
+		if _, err := parseUpstreamURL(record.BaseURL); err != nil {
+			return err
 		}
 	}
 	if record.SpoofProfile != "" && record.SpoofProfile != "claude-code" && record.SpoofProfile != "codex" && record.SpoofProfile != "generic" {

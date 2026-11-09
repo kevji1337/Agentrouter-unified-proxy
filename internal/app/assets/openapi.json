@@ -1,19 +1,453 @@
 {
-  "openapi":"3.1.0",
-  "info":{"title":"AgentRouter Unified Proxy","version":"3.0.0","description":"OpenAI-compatible self-hosted gateway. Use a managed arp_ client key as Bearer authentication."},
-  "servers":[{"url":"/v1"}],
-  "components":{"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer"}}},
-  "security":[{"bearerAuth":[]}],
-  "paths":{
-    "/chat/completions":{"post":{"summary":"Chat Completions converted through Responses API","responses":{"200":{"description":"Completion or SSE stream"}}}},
-    "/responses":{"post":{"summary":"Responses API","responses":{"200":{"description":"Response or SSE stream"}}}},
-    "/completions":{"post":{"summary":"Legacy text completions passthrough","responses":{"200":{"description":"Completion"}}}},
-    "/models":{"get":{"summary":"List models","responses":{"200":{"description":"Model list"}}}},
-    "/embeddings":{"post":{"summary":"Create embeddings","responses":{"200":{"description":"Embedding response"}}}},
-    "/moderations":{"post":{"summary":"Create moderation","responses":{"200":{"description":"Moderation response"}}}},
-    "/files":{"get":{"summary":"List files","responses":{"200":{"description":"Files"}}},"post":{"summary":"Upload file","responses":{"200":{"description":"File"}}}},
-    "/batches":{"get":{"summary":"List batches","responses":{"200":{"description":"Batches"}}},"post":{"summary":"Create batch","responses":{"200":{"description":"Batch"}}}},
-    "/images/generations":{"post":{"summary":"Generate images","responses":{"200":{"description":"Images"}}}},
-    "/audio/transcriptions":{"post":{"summary":"Transcribe audio","responses":{"200":{"description":"Transcription"}}}}
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AgentRouter Unified Proxy",
+    "version": "3.0.0",
+    "description": "OpenAI-compatible self-hosted gateway. Use a managed arp_ client key as Bearer authentication."
+  },
+  "servers": [
+    {
+      "url": "/v1"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      },
+      "adminSession": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Admin-Session"
+      }
+    },
+    "schemas": {
+      "APIKeyPolicy": {
+        "type": "object",
+        "properties": {
+          "api_protocol": {
+            "type": "string",
+            "enum": [
+              "responses",
+              "chat-completions"
+            ],
+            "description": "Create default: responses. Omitted on policy update: preserve current protocol."
+          },
+          "base_url": {
+            "type": "string",
+            "description": "Absolute http(s) URL or empty for default upstream. Origin/API prefix, optional /v1; no userinfo, query or fragment."
+          },
+          "spoof_profile": {
+            "type": "string",
+            "enum": [
+              "",
+              "generic",
+              "claude-code",
+              "codex"
+            ],
+            "description": "Empty: default profile on default origin, generic on other origins."
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": -1000,
+            "maximum": 1000
+          },
+          "weight": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "0 or omitted normalizes to 1"
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "monthly_budget_usd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "input_cost_per_million": {
+            "type": "number",
+            "minimum": 0
+          },
+          "output_cost_per_million": {
+            "type": "number",
+            "minimum": 0
+          },
+          "daily_request_limit": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "APIKeyView": {
+        "type": "object",
+        "description": "Masked credential and routing/usage policy. No plaintext upstream key, nonce or ciphertext.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "mask": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "api_protocol": {
+            "type": "string",
+            "enum": [
+              "responses",
+              "chat-completions"
+            ]
+          },
+          "spoof_profile": {
+            "type": "string"
+          },
+          "uses": {
+            "type": "integer"
+          },
+          "failures": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/chat/completions": {
+      "post": {
+        "summary": "Native Chat Completions or Responses adapter, according to selected upstream api_protocol",
+        "responses": {
+          "200": {
+            "description": "Completion or SSE stream"
+          },
+          "503": {
+            "description": "No available key matching model and routing policy"
+          }
+        }
+      }
+    },
+    "/responses": {
+      "post": {
+        "summary": "Responses API",
+        "responses": {
+          "200": {
+            "description": "Response or SSE stream"
+          },
+          "503": {
+            "description": "No available compatible upstream (error.code=no_compatible_upstream)"
+          }
+        },
+        "description": "Routes only to upstreams configured with api_protocol=responses. No implicit Responses-to-Chat conversion."
+      }
+    },
+    "/completions": {
+      "post": {
+        "summary": "Legacy text completions passthrough",
+        "responses": {
+          "200": {
+            "description": "Completion"
+          }
+        }
+      }
+    },
+    "/models": {
+      "get": {
+        "summary": "List models",
+        "responses": {
+          "200": {
+            "description": "Model list"
+          }
+        }
+      }
+    },
+    "/embeddings": {
+      "post": {
+        "summary": "Create embeddings",
+        "responses": {
+          "200": {
+            "description": "Embedding response"
+          }
+        }
+      }
+    },
+    "/moderations": {
+      "post": {
+        "summary": "Create moderation",
+        "responses": {
+          "200": {
+            "description": "Moderation response"
+          }
+        }
+      }
+    },
+    "/files": {
+      "get": {
+        "summary": "List files",
+        "responses": {
+          "200": {
+            "description": "Files"
+          }
+        }
+      },
+      "post": {
+        "summary": "Upload file",
+        "responses": {
+          "200": {
+            "description": "File"
+          }
+        }
+      }
+    },
+    "/batches": {
+      "get": {
+        "summary": "List batches",
+        "responses": {
+          "200": {
+            "description": "Batches"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create batch",
+        "responses": {
+          "200": {
+            "description": "Batch"
+          }
+        }
+      }
+    },
+    "/images/generations": {
+      "post": {
+        "summary": "Generate images",
+        "responses": {
+          "200": {
+            "description": "Images"
+          }
+        }
+      }
+    },
+    "/audio/transcriptions": {
+      "post": {
+        "summary": "Transcribe audio",
+        "responses": {
+          "200": {
+            "description": "Transcription"
+          }
+        }
+      }
+    },
+    "/api/admin/keys": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "get": {
+        "security": [
+          {
+            "adminSession": []
+          }
+        ],
+        "summary": "List masked upstream credentials",
+        "responses": {
+          "200": {
+            "description": "data array of APIKeyView",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/APIKeyView"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "security": [
+          {
+            "adminSession": []
+          }
+        ],
+        "summary": "Create encrypted upstream credential (admin role)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "key"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "key": {
+                    "type": "string",
+                    "writeOnly": true,
+                    "minLength": 8,
+                    "maxLength": 4096
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "policy": {
+                    "$ref": "#/components/schemas/APIKeyPolicy"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Masked credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid URL, protocol, credential or disallowed origin"
+          },
+          "403": {
+            "description": "Admin role required"
+          }
+        }
+      }
+    },
+    "/api/admin/keys/{id}/policy": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "patch": {
+        "security": [
+          {
+            "adminSession": []
+          }
+        ],
+        "summary": "Replace upstream routing policy (admin role)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/APIKeyPolicy"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated masked credential"
+          },
+          "400": {
+            "description": "Invalid policy, URL or protocol"
+          },
+          "403": {
+            "description": "Admin role required"
+          }
+        }
+      }
+    },
+    "/api/admin/keys/{id}/test": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "security": [
+          {
+            "adminSession": []
+          }
+        ],
+        "summary": "Probe optional models endpoint (admin role)",
+        "description": "15s bounded GET; does not verify generation protocol or spend generation tokens. 404/405/501 are inconclusive and leave health/cooldown unchanged.",
+        "responses": {
+          "200": {
+            "description": "Probe result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "inconclusive": {
+                      "type": "boolean"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "duration_ms": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required"
+          }
+        }
+      }
+    }
   }
 }
