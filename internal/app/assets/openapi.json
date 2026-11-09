@@ -935,6 +935,172 @@
           }
         }
       }
+    },
+    "/api/admin/logs": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "get": {
+        "security": [
+          {
+            "adminSession": []
+          }
+        ],
+        "summary": "Recent readable gateway events with process-aware cursor",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            },
+            "description": "0 fetches newest window; nonzero fetches newer records chronologically."
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "In-memory per-process ring; not PostgreSQL history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "instance": {
+                      "type": "string"
+                    },
+                    "next_after": {
+                      "type": "integer"
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    },
+                    "reset": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "seq": {
+                            "type": "integer"
+                          },
+                          "time": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          },
+                          "summary": {
+                            "type": "string"
+                          },
+                          "category": {
+                            "type": "string"
+                          },
+                          "background": {
+                            "type": "boolean"
+                          },
+                          "level": {
+                            "type": "string"
+                          },
+                          "request_id": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Administrator/viewer authentication required"
+          }
+        }
+      }
+    },
+    "/api/admin/keys/{id}": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "patch": {
+        "security": [
+          {
+            "adminSession": []
+          }
+        ],
+        "summary": "Edit name/enabled and optionally replace encrypted API credential",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "key": {
+                    "type": "string",
+                    "writeOnly": true,
+                    "maxLength": 4096,
+                    "description": "Omitted or empty keeps credential. Nonempty: 8–4096 non-whitespace chars; replacement clears old cooldown, preserves bindings/usage."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Masked key view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid credential/name"
+          },
+          "403": {
+            "description": "Admin role required"
+          }
+        }
+      }
     }
   }
 }

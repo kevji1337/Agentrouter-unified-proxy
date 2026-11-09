@@ -146,6 +146,9 @@ type apiKeyPolicy struct {
 }
 
 type selectedAPIKey struct {
+	Mask         string
+	ProviderID   string
+	ProviderName string
 	ProxyMode    string
 	NetworkProxy *selectedNetworkProxy
 	ID           string
@@ -461,7 +464,18 @@ func (store *apiKeyStore) status() apiKeyStoreStatus {
 	return status
 }
 
+func validateAPIKey(key string) error {
+	if len(key) < 8 || len(key) > 4096 || strings.ContainsAny(key, "\r\n\t ") {
+		return errors.New("API key must contain 8 to 4096 non-whitespace characters")
+	}
+	return nil
+}
+
 func (store *apiKeyStore) update(id string, name *string, enabled *bool) (apiKeyView, error) {
+	return store.updateCredential(id, name, enabled, nil)
+}
+
+func (store *apiKeyStore) updateCredential(id string, name *string, enabled *bool, replacement *string) (apiKeyView, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := store.ready(); err != nil {
@@ -472,6 +486,22 @@ func (store *apiKeyStore) update(id string, name *string, enabled *bool) (apiKey
 		return apiKeyView{}, os.ErrNotExist
 	}
 	old := store.keys[index]
+	updated := old
+	if replacement != nil && strings.TrimSpace(*replacement) != "" {
+		key := strings.TrimSpace(*replacement)
+		if err := validateAPIKey(key); err != nil {
+			return apiKeyView{}, err
+		}
+		nonce, ciphertext, err := store.encrypt(key)
+		if err != nil {
+			return apiKeyView{}, err
+		}
+		updated.Nonce, updated.Ciphertext, updated.Mask = nonce, ciphertext, maskAPIKey(key)
+		// A new credential may recover from the old key's auth/rate-limit failure.
+		// Preserve provider/proxy bindings, limits and historical usage.
+		updated.LastError = ""
+		updated.CooldownUntil = time.Time{}
+	}
 	if name != nil {
 		trimmed := strings.TrimSpace(*name)
 		if trimmed == "" || len(trimmed) > 80 {
@@ -482,12 +512,13 @@ func (store *apiKeyStore) update(id string, name *string, enabled *bool) (apiKey
 				return apiKeyView{}, errors.New("a key with this name already exists")
 			}
 		}
-		store.keys[index].Name = trimmed
+		updated.Name = trimmed
 	}
 	if enabled != nil {
-		store.keys[index].Enabled = *enabled
+		updated.Enabled = *enabled
 	}
-	store.keys[index].UpdatedAt = time.Now().UTC()
+	updated.UpdatedAt = time.Now().UTC()
+	store.keys[index] = updated
 	if err := store.saveLocked(); err != nil {
 		store.keys[index] = old
 		return apiKeyView{}, err

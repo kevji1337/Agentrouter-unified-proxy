@@ -53,6 +53,7 @@ type proxyCredentials struct {
 // Snapshots never escape admin views or logs. Each request keeps its original
 // network route even when the pool is rebalanced concurrently.
 type selectedNetworkProxy struct {
+	Name     string
 	ID       string
 	URL      string
 	Username string
@@ -92,7 +93,7 @@ func (store *apiKeyStore) decryptProxy(record persistedNetworkProxy) (*selectedN
 	if err := json.Unmarshal([]byte(raw), &credentials); err != nil {
 		return nil, errors.New("invalid encrypted proxy credentials")
 	}
-	return &selectedNetworkProxy{ID: record.ID, URL: record.URL, Username: credentials.Username, Password: credentials.Password}, nil
+	return &selectedNetworkProxy{ID: record.ID, Name: record.Name, URL: record.URL, Username: credentials.Username, Password: credentials.Password}, nil
 }
 
 func (store *apiKeyStore) listNetworkProxies() []networkProxyView {
@@ -287,7 +288,10 @@ func (store *apiKeyStore) selectedKeyLocked(record persistedAPIKey, plain string
 	if !enabled {
 		return nil, errNoEnabledAPIKeys
 	}
-	selected := &selectedAPIKey{ID: record.ID, Name: record.Name, Key: plain, BaseURL: record.BaseURL, SpoofProfile: record.SpoofProfile, APIProtocol: effectiveProtocol(record.APIProtocol), ProxyMode: record.ProxyMode}
+	selected := &selectedAPIKey{Mask: record.Mask, ProviderID: record.ProviderID, ID: record.ID, Name: record.Name, Key: plain, BaseURL: record.BaseURL, SpoofProfile: record.SpoofProfile, APIProtocol: effectiveProtocol(record.APIProtocol), ProxyMode: record.ProxyMode}
+	if i := store.providerIndexLocked(record.ProviderID); i >= 0 {
+		selected.ProviderName = store.providers[i].Name
+	}
 	if record.ProxyID != "" {
 		var err error
 		selected.NetworkProxy, err = store.decryptProxy(store.proxies[store.proxyIndexLocked(record.ProxyID)])

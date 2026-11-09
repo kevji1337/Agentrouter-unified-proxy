@@ -93,7 +93,7 @@ pre-upgrade copy, keeping the current encrypted backup and KEY_STORE_SECRET safe
 output directory: `node scripts/admin-smoke.cjs .admin-smoke`. Set `CHROME_BIN` if
 Chrome/Chromium is not found automatically. The check exercises provider model
 editing, provider selection in key creation, proxy forms, tabs, search and pages;
-it does not contact real upstreams. Screenshots/browser profiles are test outputs,
+it also checks readable logs, filters and credential editing; it does not contact real upstreams. Screenshots/browser profiles are test outputs,
 not credentials or production configuration; do not commit the output directory.
 
 ## Admin API
@@ -108,6 +108,8 @@ Provider reads are permitted to `viewer`; mutations require `admin`:
   omitted protocol means Responses. UI always sends the complete configuration.
 - `DELETE /api/admin/providers/{id}`: 204; fails if linked keys remain.
 - `POST /api/admin/keys`: existing body with `policy.provider_id` to attach the key.
+- `PATCH /api/admin/keys/{id}`: optional name/enabled/key for credential editing;
+  omitted/empty replacement keeps the encrypted key. See [logging.md](logging.md).
 - `PATCH /api/admin/keys/{id}/policy`: set `provider_id` to link/reassign; omitted
   preserves the reference, empty explicitly unlinks.
 

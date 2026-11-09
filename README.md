@@ -327,6 +327,11 @@ curl.exe http://127.0.0.1:8080/v1/models `
 сохраняется и отправляется upstream. Логи выводятся по одной JSON-записи на
 строку и не содержат API keys, bodies или значения cookie.
 
+Во вкладке Events — читаемые итоги запросов, model/provider/key/route, фильтры,
+поиск и раскрытие деталей. Успешный фоновый шум скрыт по умолчанию. API keys → Edit
+позволяет переименовать, включить/выключить и заменить credential без раскрытия
+старого ключа. Подробности: [`docs/logging.md`](docs/logging.md).
+
 Основные Prometheus metrics:
 
 - `agentrouter_proxy_requests_total`;

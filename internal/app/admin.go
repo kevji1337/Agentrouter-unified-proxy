@@ -343,16 +343,17 @@ func (server *proxyServer) handleAdminKey(w http.ResponseWriter, r *http.Request
 		var input struct {
 			Name    *string `json:"name"`
 			Enabled *bool   `json:"enabled"`
+			Key     *string `json:"key"`
 		}
 		if err := decodeAdminJSON(w, r, &input); err != nil {
 			return
 		}
-		view, err := server.keys.update(id, input.Name, input.Enabled)
+		view, err := server.keys.updateCredential(id, input.Name, input.Enabled, input.Key)
 		if err != nil {
 			writeAdminStoreError(w, err)
 			return
 		}
-		logEvent("info", "admin_key_updated", map[string]any{"key_id": view.ID, "name": view.Name, "enabled": view.Enabled})
+		logEvent("info", "admin_key_updated", map[string]any{"key_id": view.ID, "name": view.Name, "enabled": view.Enabled, "credential_replaced": input.Key != nil && strings.TrimSpace(*input.Key) != ""})
 		writeJSON(w, http.StatusOK, view)
 	case http.MethodDelete:
 		if err := server.keys.delete(id); err != nil {
@@ -404,7 +405,7 @@ func (server *proxyServer) handleAdminLogs(w http.ResponseWriter, r *http.Reques
 	}
 	after, _ := strconv.ParseUint(r.URL.Query().Get("after"), 10, 64)
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	writeJSON(w, http.StatusOK, map[string]any{"data": adminLogRing.recent(after, limit)})
+	writeJSON(w, http.StatusOK, adminLogRing.page(after, limit))
 }
 
 func (server *proxyServer) handleAdminKeyTest(w http.ResponseWriter, r *http.Request, id string) {

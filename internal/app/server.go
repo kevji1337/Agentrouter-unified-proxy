@@ -514,18 +514,27 @@ func (server *proxyServer) probeAllKeys(ctx context.Context) {
 		logEvent("error", "key_health_load_failed", map[string]any{"error": err.Error()})
 		return
 	}
+	accepted, failed, inconclusive := 0, 0, 0
 	for _, key := range keys {
 		if ctx.Err() != nil {
 			return
 		}
 		status, message := server.probeAPIKey(ctx, key)
+		if probeInconclusive(status) {
+			inconclusive++
+		} else if status >= 200 && status < 300 {
+			accepted++
+		} else {
+			failed++
+			logEvent("warn", "key_health_failed", map[string]any{"key_id": key.ID, "key_name": key.Name, "provider": providerLogName(&key), "status": status, "reason": message})
+		}
 		if !probeInconclusive(status) {
 			server.keys.recordResult(key.ID, status, message, server.cfg.KeyCooldown)
 		}
 	}
 	now := time.Now().UTC()
 	server.lastKeyHealth.Store(now)
-	logEvent("info", "key_health_completed", map[string]any{"checked": len(keys)})
+	logEvent("info", "key_health_completed", map[string]any{"checked": len(keys), "accepted": accepted, "failed": failed, "inconclusive": inconclusive})
 }
 
 func validKeySelectionMode(mode string) bool {
@@ -644,6 +653,7 @@ type statusWriter struct {
 	http.ResponseWriter
 	status int
 	bytes  int64
+	log    *requestLog
 }
 
 func (w *statusWriter) WriteHeader(status int) {
@@ -660,6 +670,9 @@ func (w *statusWriter) Write(data []byte) (int, error) {
 	}
 	n, err := w.ResponseWriter.Write(data)
 	w.bytes += int64(n)
+	if err != nil {
+		w.log.set(map[string]any{"error_code": "client_write_failed", "response_interrupted": true})
+	}
 	return n, err
 }
 
@@ -675,7 +688,9 @@ func (w *statusWriter) Flush() {
 func (server *proxyServer) logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		recorder := &statusWriter{ResponseWriter: w}
+		record := &requestLog{fields: map[string]any{"method": r.Method, "path": r.URL.Path}}
+		r = r.WithContext(context.WithValue(r.Context(), requestLogContextKey{}, record))
+		recorder := &statusWriter{ResponseWriter: w, log: record}
 		next.ServeHTTP(recorder, r)
 		status := recorder.status
 		if status == 0 {
@@ -686,11 +701,9 @@ func (server *proxyServer) logging(next http.Handler) http.Handler {
 		if r.URL.Path == "/api/admin/logs" || r.URL.Path == "/health" || r.URL.Path == "/metrics" {
 			return
 		}
-		logEvent("info", "request_completed", map[string]any{
-			"request_id": requestIDFromContext(r.Context()), "method": r.Method,
-			"path": r.URL.Path, "status": status, "bytes": recorder.bytes,
-			"duration_ms": duration.Milliseconds(), "remote": r.RemoteAddr,
-		})
+		record.set(map[string]any{"status": status, "bytes": recorder.bytes, "duration_ms": duration.Milliseconds(), "request_id": requestIDFromContext(r.Context()), "remote": r.RemoteAddr})
+		fields := record.snapshot()
+		logEvent(requestLogLevel(status, fields), "request_completed", fields)
 	})
 }
 
@@ -833,8 +846,10 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 		defer server.metrics.activeSSE.Add(-1)
 		if isEventStream(resp.Header) {
 			if err := convertResponsesSSE(w, resp.Body, meta); err != nil {
-				logEvent("error", "sse_conversion_failed", map[string]any{
-					"request_id": requestIDFromContext(r.Context()), "error": err.Error(),
+				requestLogFromContext(r.Context()).responseError("conversion_error")
+				requestLogFromContext(r.Context()).set(map[string]any{"response_interrupted": true})
+				logRequestEvent(r.Context(), "error", "sse_conversion_failed", map[string]any{
+					"request_id": requestIDFromContext(r.Context()), "error_code": "conversion_error",
 				})
 			}
 			return
@@ -847,7 +862,7 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 		}
 		chat, err := convertResponsesResponse(raw, meta.Model)
 		if err != nil {
-			writeError(w, http.StatusBadGateway, "conversion_error", err.Error())
+			writeError(w, http.StatusBadGateway, "conversion_error", "failed to convert upstream response")
 			return
 		}
 		writeSyntheticChatStream(w, chat, meta.IncludeUsage)
@@ -869,7 +884,7 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 	}
 	chat, err := convertResponsesResponse(raw, meta.Model)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "conversion_error", err.Error())
+		writeError(w, http.StatusBadGateway, "conversion_error", "failed to convert upstream response")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -953,7 +968,14 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 	return resp, err
 }
 
-func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.Header, method, path string, body []byte, stream bool) (*http.Response, *requestMeta, error) {
+func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.Header, method, path string, body []byte, stream bool) (response *http.Response, responseMeta *requestMeta, resultErr error) {
+	record := requestLogFromContext(ctx)
+	record.set(map[string]any{"model": modelFromRequestBody(body), "stream": stream})
+	defer func() {
+		if resultErr != nil {
+			record.set(map[string]any{"error_code": requestFailureCode(resultErr)})
+		}
+	}()
 	retries := 0
 	wafRetried := false
 	resourceRetried := false
@@ -981,7 +1003,7 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 	}
 	if err != nil {
 		if errors.Is(err, errNoEnabledAPIKeys) {
-			logEvent("error", "no_available_api_keys", map[string]any{"model": model})
+			logRequestEvent(ctx, "error", "no_available_api_keys", map[string]any{"model": model})
 		}
 		return nil, nil, err
 	}
@@ -990,6 +1012,7 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 		if settingsErr != nil {
 			return nil, nil, settingsErr
 		}
+		record.set(safeRouteFields(selectedKey, baseURL, protocol))
 		attemptPath, attemptBody, meta, prepareErr := server.prepareUpstream(path, body, protocol)
 		if prepareErr != nil {
 			return nil, nil, prepareErr
@@ -1039,6 +1062,8 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 			req.Header.Set("Cookie", cookie)
 		}
 
+		safePath, _, _ := strings.Cut(attemptPath, "?")
+		record.attempt(map[string]any{"upstream_path": safePath})
 		resp, err := route.client.Do(req)
 		if err != nil {
 			cancel()
@@ -1051,9 +1076,9 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 			if (method == http.MethodGet || method == http.MethodHead || server.cfg.RetryUnsafeRequests) && retries < server.cfg.MaxRetries {
 				retries++
 				server.metrics.retries.Add(1)
-				logEvent("warn", "upstream_transport_retry", map[string]any{
+				logRequestEvent(ctx, "warn", "upstream_transport_retry", map[string]any{
 					"request_id": requestIDFromContext(ctx), "attempt": retries,
-					"max_retries": server.cfg.MaxRetries,
+					"max_retries": server.cfg.MaxRetries, "error_code": requestFailureCode(err),
 				})
 				if !sleepContext(ctx, server.cfg.RetryDelay*time.Duration(1<<(retries-1))) {
 					return nil, nil, ctx.Err()
@@ -1062,9 +1087,11 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 			}
 			return nil, nil, err
 		}
+		record.set(map[string]any{"upstream_status": resp.StatusCode})
 		if selectedKey != nil && selectedKey.NetworkProxy != nil && resp.StatusCode == http.StatusProxyAuthRequired {
 			server.keys.recordProxyProbe(selectedKey.NetworkProxy.ID, false)
-			resp.Body = newIdleTimeoutBody(resp.Body, cancel, server.cfg.SSEIdleTimeout)
+			record.set(map[string]any{"error_code": "network_proxy_auth"})
+			resp.Body = &loggedResponseBody{ReadCloser: newIdleTimeoutBody(resp.Body, cancel, server.cfg.SSEIdleTimeout), ctx: ctx}
 			return resp, meta, nil
 		}
 		resp.Body = newIdleTimeoutBody(resp.Body, cancel, server.cfg.SSEIdleTimeout)
@@ -1080,7 +1107,7 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 			if isWafBlock(resp.StatusCode, raw) {
 				wafRetried = true
 				server.metrics.retries.Add(1)
-				logEvent("warn", "waf_block_retry", map[string]any{
+				logRequestEvent(ctx, "warn", "waf_block_retry", map[string]any{
 					"request_id": requestIDFromContext(ctx), "status": resp.StatusCode,
 				})
 				if route.cookies.warmupWithClient(ctx, server.cfg.UpstreamURL, route.client) {
@@ -1107,7 +1134,7 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 					}
 					resourceRetried = true
 					server.metrics.retries.Add(1)
-					logEvent("warn", "azure_resource_state_retry", map[string]any{
+					logRequestEvent(ctx, "warn", "azure_resource_state_retry", map[string]any{
 						"request_id": requestIDFromContext(ctx),
 					})
 					continue
@@ -1123,6 +1150,7 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 				return nil, nil, readErr
 			}
 			failedKeyID := selectedKey.ID
+			failedKey := selectedKey
 			server.keys.recordResult(failedKeyID, resp.StatusCode, http.StatusText(resp.StatusCode), server.cfg.KeyCooldown)
 			excludedKeys[failedKeyID] = true
 			nextAuth, nextKey, selectErr := server.selectPoolAuthorizationFor(excludedKeys, model, requiredProtocol)
@@ -1131,9 +1159,10 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 				remainingFailovers--
 				authHeader, selectedKey = nextAuth, nextKey
 				server.metrics.retries.Add(1)
-				logEvent("warn", "api_key_failover", map[string]any{
+				logRequestEvent(ctx, "warn", "api_key_failover", map[string]any{
 					"request_id": requestIDFromContext(ctx), "status": resp.StatusCode,
 					"failed_key_id": failedKeyID, "next_key_id": nextKey.ID,
+					"failed_key_name": failedKey.Name, "failed_network_route": networkRouteLogName(failedKey), "next_network_route": networkRouteLogName(nextKey), "failed_provider": safeRouteFields(failedKey, baseURL, protocol)["provider"], "next_key_name": nextKey.Name, "next_provider": providerLogName(nextKey),
 				})
 				continue
 			}
@@ -1146,7 +1175,7 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 			_ = resp.Body.Close()
 			retries++
 			server.metrics.retries.Add(1)
-			logEvent("warn", "upstream_status_retry", map[string]any{
+			logRequestEvent(ctx, "warn", "upstream_status_retry", map[string]any{
 				"request_id": requestIDFromContext(ctx), "attempt": retries,
 				"status": resp.StatusCode, "max_retries": server.cfg.MaxRetries,
 			})
@@ -1162,10 +1191,12 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 				release := server.infra.acquireKey(ctx, keyID)
 				resp.Body = newUsageTrackingBody(resp.Body, func(input, output uint64) {
 					server.keys.recordUsage(keyID, input, output)
+					record.set(map[string]any{"input_tokens": input, "output_tokens": output})
 				})
 				resp.Body = newReleaseBody(resp.Body, release)
 			}
 		}
+		resp.Body = &loggedResponseBody{ReadCloser: resp.Body, ctx: ctx}
 		return resp, meta, nil
 	}
 }
@@ -1291,6 +1322,9 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
+	if writer, ok := w.(*statusWriter); ok {
+		writer.log.responseError(code)
+	}
 	writeJSON(w, status, map[string]any{"error": map[string]any{
 		"type": "proxy_error", "code": code, "message": message,
 	}})

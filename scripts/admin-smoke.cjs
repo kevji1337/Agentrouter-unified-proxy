@@ -26,6 +26,15 @@ const providers = [
 ];
 const keys = Array.from({length:25}, (_,i) => ({id:'key_'+i, name:'Key '+i, provider_id:'provider_a', provider_name:'Provider A', base_url:providers[0].base_url, api_protocol:'chat-completions', proxy_mode:'auto', proxy_id:'proxy_1', enabled:true, mask:'sk-masked', uses:i, failures:0, models:['model-a']}));
 const proxies = [{id:'proxy_1', name:'Outbound EU', url:'socks5://proxy.example:1080', enabled:true, has_auth:true, assigned_keys:25}];
+let journalInstance = 'process-1';
+const journal = [
+ {seq:1,time:'2026-01-01T20:53:59Z',level:'info',category:'requests',message:'request_completed',summary:'POST /v1/chat/completions → HTTP 200 · 1250 мс',model:'model-a',provider:'Provider A',key_name:'Primary',key_mask:'sk-••••TEST',network_route:'Outbound EU',request_id:'req-a',status:200,duration_ms:1250},
+ {seq:2,time:'2026-01-01T20:54:12Z',level:'info',category:'tools',background:true,message:'tool_call_emitted',summary:'Передан инструмент read_file',tool:'read_file',request_id:'req-a'},
+ {seq:3,time:'2026-01-01T20:54:12Z',level:'warn',category:'tools',message:'parallel_tools_suppressed',summary:'Upstream прислал 3 инструмента, передан 1',returned:3,forwarded:1,request_id:'req-a'},
+ {seq:4,time:'2026-01-01T20:54:13Z',level:'error',category:'requests',message:'request_completed',summary:'POST /v1/responses → HTTP 502 · ошибка соединения',provider:'Provider B',model:'model-b',error_code:'connection_error',request_id:'req-b',status:502},
+ {seq:5,time:'2026-01-01T20:54:47Z',level:'info',category:'system',background:true,message:'key_health_completed',summary:'Проверка ключей: 25 проверено'},
+ {seq:6,time:'2026-01-01T20:54:59Z',level:'info',category:'requests',message:'request_completed',summary:'<img src=x onerror="window.fixtureXss=true">',model:'model-safe',request_id:'req-safe',status:200},
+];
 window.confirm = () => true;
 window.prompt = () => 'https://probe.example';
 window.addEventListener('error', e => document.body.dataset.smokeError = e.message);
@@ -33,7 +42,8 @@ window.fetch = async (url, options = {}) => {
  requests.push([url, options]);
  const status = {upstream:'https://agentrouter.org', admin:{role:'admin'}, store:{ready:true, available:25, total:25}, selection_mode:'pool-only', network_proxy_pool:true};
  let data = {};
- if (url.includes('/status')) data = status;
+ if (url.includes('/logs')) {const after=Number(new URL(url,'http://fixture').searchParams.get('after'));const rows=after===0?journal:journal.filter(item=>item.seq>after);data={data:rows,instance:journalInstance,next_after:rows.length?rows[rows.length-1].seq:after,has_more:false};}
+ else if (url.includes('/status')) data = status;
  else if (url.includes('/providers')) data = {data:providers};
  else if (url.includes('/network-proxies')) data = {data:proxies, ok:true, message:'Fixture proxy OK'};
  else if (url.includes('/keys')) data = {data:keys};
@@ -78,6 +88,16 @@ async function smoke() {
   assert(policy.proxy_mode === 'fixed' && policy.proxy_id === 'proxy_1', 'network binding');
   assert(document.getElementById('keyValue').value === '', 'key field cleared');
 
+  document.querySelector('[data-edit-key="key_24"]').click();
+  assert(document.getElementById('editKeyDialog').open, 'credential editor');
+  assert(document.getElementById('editKeyValue').value === '', 'old key must not be revealed');
+  document.getElementById('editKeyName').value = 'Renamed key';
+  document.getElementById('editKeyValue').value = 'sk-replacement-fixture';
+  document.getElementById('editKeyForm').dispatchEvent(new Event('submit', {cancelable:true})); await pause();
+  const edited = requests.find(([p,o]) => p === '/api/admin/keys/key_24' && o.method === 'PATCH');
+  assert(JSON.parse(edited[1].body).key === 'sk-replacement-fixture', 'replacement payload');
+  assert(document.getElementById('editKeyValue').value === '', 'replacement field cleared');
+
   document.querySelector('[data-page="proxies"]').click(); await pause();
   assert(document.querySelectorAll('#proxyContent tbody tr').length === 1, 'proxy table');
   document.getElementById('addProxyBtn').click();
@@ -91,6 +111,31 @@ async function smoke() {
   assert(!requests.some(([p]) => p.includes('/logs')), 'hidden events fetched');
   document.querySelector('[data-page="providers"]').click(); await pause();
   assert(document.documentElement.scrollWidth <= innerWidth, 'page horizontal overflow');
+  document.querySelector('[data-page="logs"]').click(); await pause();
+  assert(document.querySelectorAll('.log-entry').length === 4, 'background hidden by default');
+  assert(document.getElementById('logList').textContent.includes('Outbound EU'), 'route metadata');
+  assert(!document.getElementById('logList').querySelector('img') && !window.fixtureXss, 'log HTML escaped');
+  document.getElementById('logLevel').value = 'problems';
+  document.getElementById('logLevel').dispatchEvent(new Event('change'));
+  assert(document.querySelectorAll('.log-entry').length === 2, 'problem filter');
+  document.getElementById('logLevel').value = '';
+  document.getElementById('logSearch').value = 'Provider B';
+  document.getElementById('logSearch').dispatchEvent(new Event('input'));
+  assert(document.querySelectorAll('.log-entry').length === 1, 'log search');
+  document.querySelector('[data-log-request="req-b"]').click();
+  assert(document.querySelectorAll('.log-entry').length === 1, 'request grouping');
+  document.getElementById('logClearRequest').click();
+  assert(document.querySelectorAll('.log-entry').length === 6, 'background events toggle');
+  document.querySelector('.log-entry').open = true;
+  const opened = document.querySelector('.log-entry').dataset.seq;
+  document.getElementById('logPause').click();
+  assert(document.querySelector('[data-seq="'+opened+'"]').open, 'details stay expanded');
+  document.getElementById('logPause').click(); await pause();
+  journalInstance = 'process-2';
+  document.getElementById('refreshBtn').click(); await pause();
+  assert(document.getElementById('logState').textContent.includes('сменился'), 'rolling deploy cursor recovery');
+  assert(document.querySelectorAll('.log-entry').length === 6, 'new process events visible');
+  assert(document.documentElement.scrollWidth <= innerWidth, 'journal responsive layout');
   document.body.dataset.smokeResult = 'passed';
  } catch (error) {
   document.body.dataset.smokeResult = 'failed: ' + error.message;
@@ -121,5 +166,5 @@ for (const width of [1280, 390]) {
  if (result.error || !outcome || outcome[1] !== 'passed' || runtimeError) {
   throw Error(`Chrome ${width}: ${result.error || (runtimeError && runtimeError[1]) || (outcome && outcome[1]) || 'smoke result missing'}`);
  }
- console.log(`Chrome ${width}px: provider models, key selection, proxies, tabs and pagination passed`);
+ console.log(`Chrome ${width}px: provider models, credential editing, proxies, readable logs and filters passed`);
 }

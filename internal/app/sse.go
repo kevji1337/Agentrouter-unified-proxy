@@ -421,7 +421,7 @@ func finalizeChatStream(w http.ResponseWriter, state *chatStreamState, reason st
 		if arguments == "" || !json.Valid([]byte(arguments)) {
 			if arguments != "" {
 				logEvent("warn", "invalid_streamed_tool_arguments", map[string]any{
-					"tool": tool.Name, "call_id": tool.CallID,
+					"tool": tool.Name, "call_id": tool.CallID, "request_id": state.RequestID,
 				})
 			}
 			arguments = "{}"

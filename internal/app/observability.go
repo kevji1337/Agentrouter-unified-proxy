@@ -17,9 +17,10 @@ import (
 type requestIDContextKey struct{}
 
 type logRing struct {
-	mu    sync.Mutex
-	next  uint64
-	items []map[string]any
+	mu       sync.Mutex
+	next     uint64
+	instance string
+	items    []map[string]any
 }
 
 var adminLogRing = &logRing{items: make([]map[string]any, 0, 500)}
@@ -59,6 +60,9 @@ func logEvent(level, message string, fields map[string]any) {
 	for key, value := range fields {
 		record[key] = value
 	}
+	record["summary"] = logSummary(message, record)
+	record["category"] = logCategory(message)
+	record["background"] = logIsBackground(message, record)
 	adminLogRing.add(record)
 	if sink, ok := persistentLogSink.Load().(func(map[string]any)); ok && sink != nil {
 		sink(record)
@@ -92,24 +96,55 @@ func (ring *logRing) add(record map[string]any) {
 	}
 }
 
-func (ring *logRing) recent(after uint64, limit int) []map[string]any {
+type logPage struct {
+	Instance  string           `json:"instance"`
+	Data      []map[string]any `json:"data"`
+	NextAfter uint64           `json:"next_after"`
+	HasMore   bool             `json:"has_more"`
+	Reset     bool             `json:"reset"`
+}
+
+func (ring *logRing) page(after uint64, limit int) logPage {
 	ring.mu.Lock()
 	defer ring.mu.Unlock()
 	if limit < 1 || limit > 200 {
 		limit = 100
 	}
-	result := make([]map[string]any, 0, limit)
-	for _, item := range ring.items {
+	if ring.instance == "" {
+		ring.instance = newRequestID()
+	}
+	page := logPage{Instance: ring.instance, Data: make([]map[string]any, 0, limit), NextAfter: after}
+	if after > ring.next {
+		page.Reset = true
+		after = 0
+		page.NextAfter = 0
+	}
+	start := 0
+	// Opening the journal shows recent events, not an old backlog.
+	if after == 0 && len(ring.items) > limit {
+		start = len(ring.items) - limit
+	}
+	for _, item := range ring.items[start:] {
 		seq, _ := item["seq"].(uint64)
 		if seq <= after {
 			continue
 		}
-		result = append(result, item)
-		if len(result) >= limit {
+		if len(page.Data) == limit {
+			page.HasMore = true
 			break
 		}
+		copyRecord := make(map[string]any, len(item))
+		for k, v := range item {
+			copyRecord[k] = v
+		}
+		page.Data = append(page.Data, copyRecord)
+		page.NextAfter = seq
 	}
-	return result
+	return page
+}
+
+func (ring *logRing) recent(after uint64, limit int) []map[string]any {
+	return ring.page(after, limit).Data
 }
 
 type proxyMetrics struct {
