@@ -12,6 +12,32 @@ import (
 	"time"
 )
 
+// Favicon is a public static asset, not a gateway API request.
+func (server *proxyServer) handleFavicon(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET or HEAD")
+		return
+	}
+	icon, contentType := faviconICO, "image/vnd.microsoft.icon"
+	if r.URL.Path == "/favicon.svg" {
+		icon, contentType = faviconSVG, "image/svg+xml"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Length", strconv.Itoa(len(icon)))
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	_, _ = w.Write(icon)
+}
+
+func publicFaviconRequest(r *http.Request) bool {
+	return (r.Method == http.MethodGet || r.Method == http.MethodHead) && (r.URL.Path == "/favicon.ico" || r.URL.Path == "/favicon.svg")
+}
+
 func (server *proxyServer) handleAdminPage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")

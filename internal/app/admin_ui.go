@@ -10,3 +10,9 @@ var openAPISpec []byte
 
 //go:embed assets/docs.html
 var apiDocsHTML string
+
+//go:embed assets/favicon.svg
+var faviconSVG []byte
+
+//go:embed assets/favicon.ico
+var faviconICO []byte

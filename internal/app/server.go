@@ -567,6 +567,8 @@ func (server *proxyServer) upstreamURLFor(base *url.URL, path string) string {
 func (server *proxyServer) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/admin", server.handleAdminPage)
+	mux.HandleFunc("/favicon.ico", server.handleFavicon)
+	mux.HandleFunc("/favicon.svg", server.handleFavicon)
 	mux.HandleFunc("/openapi.json", server.handleOpenAPI)
 	mux.HandleFunc("/docs", server.handleAPIDocs)
 	mux.HandleFunc("/api/admin/", server.handleAdminAPI)
@@ -604,7 +606,7 @@ func cors(next http.Handler) http.Handler {
 
 func (server *proxyServer) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodOptions || r.URL.Path == "/health" || r.URL.Path == "/admin" || r.URL.Path == "/docs" || r.URL.Path == "/openapi.json" || strings.HasPrefix(r.URL.Path, "/api/admin/") {
+		if publicFaviconRequest(r) || r.Method == http.MethodOptions || r.URL.Path == "/health" || r.URL.Path == "/admin" || r.URL.Path == "/docs" || r.URL.Path == "/openapi.json" || strings.HasPrefix(r.URL.Path, "/api/admin/") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -698,7 +700,7 @@ func (server *proxyServer) logging(next http.Handler) http.Handler {
 		}
 		duration := time.Since(start)
 		server.metrics.observe(r.URL.Path, status, duration)
-		if r.URL.Path == "/api/admin/logs" || r.URL.Path == "/health" || r.URL.Path == "/metrics" {
+		if (publicFaviconRequest(r) && status == http.StatusOK) || r.URL.Path == "/api/admin/logs" || r.URL.Path == "/health" || r.URL.Path == "/metrics" {
 			return
 		}
 		record.set(map[string]any{"status": status, "bytes": recorder.bytes, "duration_ms": duration.Milliseconds(), "request_id": requestIDFromContext(r.Context()), "remote": r.RemoteAddr})
