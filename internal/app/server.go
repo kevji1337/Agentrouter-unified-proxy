@@ -371,6 +371,14 @@ func (store *cookieStore) status() (bool, []string, time.Time, time.Time) {
 }
 
 func (store *cookieStore) warmup(ctx context.Context, upstream *url.URL) bool {
+	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DisableKeepAlives: true, Proxy: http.ProxyFromEnvironment}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return store.warmupWithClient(ctx, upstream, client)
+}
+
+func (store *cookieStore) warmupWithClient(ctx context.Context, upstream *url.URL, client *http.Client) bool {
+	boundedClient := *client
+	boundedClient.Timeout = 10 * time.Second
+	client = &boundedClient
 	store.warmupMu.Lock()
 	defer store.warmupMu.Unlock()
 
@@ -379,16 +387,6 @@ func (store *cookieStore) warmup(ctx context.Context, upstream *url.URL) bool {
 		warmupURL.Path = "/"
 	}
 	warmupURL.RawQuery = ""
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &http.Transport{
-			DisableKeepAlives: true,
-			Proxy:             http.ProxyFromEnvironment,
-		},
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
 	backoff := []time.Duration{time.Second, 2 * time.Second}
 	for attempt := 0; attempt < 3; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, warmupURL.String(), nil)
@@ -434,6 +432,7 @@ type proxyServer struct {
 	cfg           config
 	cookies       *cookieStore
 	client        *http.Client
+	outbound      *outboundRoutes
 	metrics       *proxyMetrics
 	keys          *apiKeyStore
 	routingMode   atomic.Value
@@ -475,6 +474,7 @@ func newProxyServer(cfg config) *proxyServer {
 			},
 		},
 		adminSessions: make(map[string]adminSession),
+		outbound:      newOutboundRoutes(transport),
 	}
 	server.routingMode.Store(cfg.KeySelectionMode)
 	if savedMode := server.keys.savedSelectionMode(); validKeySelectionMode(savedMode) {
@@ -699,9 +699,9 @@ func (server *proxyServer) handleHealth(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")
 		return
 	}
-	present, names, updated, warmup := server.cookies.status()
+	present, names, updated, warmup := server.wafStatus()
 	status := "ok"
-	if !present {
+	if !present && server.cfg.Profile != "generic" {
 		status = "degraded"
 	}
 	payload := map[string]any{
@@ -926,7 +926,7 @@ func readRequestBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byt
 }
 
 func (server *proxyServer) warmup(ctx context.Context) bool {
-	if server.cfg.Profile == "generic" {
+	if server.cfg.Profile == "generic" || server.keys.networkPoolConfigured() {
 		return false
 	}
 	if _, err := server.validateUpstreamURL(server.cfg.UpstreamURL.String()); err != nil {
@@ -995,6 +995,10 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 			return nil, nil, prepareErr
 		}
 		wafEnabled := server.usesWAFCookies(baseURL, profile)
+		route, routeErr := server.outboundRoute(selectedKey)
+		if routeErr != nil {
+			return nil, nil, routeErr
+		}
 		var requestBody io.Reader
 		if attemptBody != nil {
 			requestBody = bytes.NewReader(attemptBody)
@@ -1031,13 +1035,16 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 		if requestID := requestIDFromContext(ctx); requestID != "" {
 			req.Header.Set("X-Request-ID", requestID)
 		}
-		if cookie := server.cookies.header(); cookie != "" && wafEnabled {
+		if cookie := route.cookies.header(); cookie != "" && wafEnabled {
 			req.Header.Set("Cookie", cookie)
 		}
 
-		resp, err := server.client.Do(req)
+		resp, err := route.client.Do(req)
 		if err != nil {
 			cancel()
+			if selectedKey != nil && selectedKey.NetworkProxy != nil {
+				server.keys.recordProxyProbe(selectedKey.NetworkProxy.ID, false)
+			}
 			if ctx.Err() != nil {
 				return nil, nil, ctx.Err()
 			}
@@ -1055,9 +1062,14 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 			}
 			return nil, nil, err
 		}
+		if selectedKey != nil && selectedKey.NetworkProxy != nil && resp.StatusCode == http.StatusProxyAuthRequired {
+			server.keys.recordProxyProbe(selectedKey.NetworkProxy.ID, false)
+			resp.Body = newIdleTimeoutBody(resp.Body, cancel, server.cfg.SSEIdleTimeout)
+			return resp, meta, nil
+		}
 		resp.Body = newIdleTimeoutBody(resp.Body, cancel, server.cfg.SSEIdleTimeout)
 		if wafEnabled {
-			server.cookies.capture(resp.Header)
+			route.cookies.capture(resp.Header)
 		}
 		if wafEnabled && !wafRetried && (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusMethodNotAllowed) {
 			raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
@@ -1071,7 +1083,9 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 				logEvent("warn", "waf_block_retry", map[string]any{
 					"request_id": requestIDFromContext(ctx), "status": resp.StatusCode,
 				})
-				server.warmup(ctx)
+				if route.cookies.warmupWithClient(ctx, server.cfg.UpstreamURL, route.client) {
+					server.metrics.wafRefreshes.Add(1)
+				}
 				continue
 			}
 			resp.Body = io.NopCloser(bytes.NewReader(raw))
@@ -1157,7 +1171,7 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 }
 
 func (server *proxyServer) selectAuthorizationFor(inbound string, excluded map[string]bool, model, requiredProtocol string) (string, *selectedAPIKey, error) {
-	inboundCompatible := requiredProtocol == "" || effectiveProtocol(server.cfg.UpstreamProtocol) == requiredProtocol
+	inboundCompatible := (requiredProtocol == "" || effectiveProtocol(server.cfg.UpstreamProtocol) == requiredProtocol) && !server.keys.networkPoolConfigured() && !server.keys.modelManaged(model)
 	switch server.currentKeySelectionMode() {
 	case "pool-only":
 		return server.selectPoolAuthorizationFor(excluded, model, requiredProtocol)
@@ -1185,6 +1199,9 @@ func (server *proxyServer) selectAuthorizationFor(inbound string, excluded map[s
 func (server *proxyServer) selectPoolAuthorizationFor(excluded map[string]bool, model, requiredProtocol string) (string, *selectedAPIKey, error) {
 	loads := server.infra.keyLoads(context.Background(), server.keys.allKeyIDs())
 	key, err := server.keys.selectNextCompatible(excluded, model, loads, requiredProtocol)
+	if errors.Is(err, errNoEnabledAPIKeys) && server.keys.blockedByProxy(excluded, model, requiredProtocol) {
+		err = errNetworkProxyUnavailable
+	}
 	if err != nil {
 		return "", nil, err
 	}
@@ -1280,6 +1297,10 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 }
 
 func writeUpstreamError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errNetworkProxyUnavailable) {
+		writeError(w, 503, "network_proxy_unavailable", err.Error())
+		return
+	}
 	if errors.Is(err, errNoEnabledAPIKeys) {
 		writeError(w, http.StatusServiceUnavailable, "no_enabled_api_keys", "no enabled API keys are available in the configured pool")
 		return

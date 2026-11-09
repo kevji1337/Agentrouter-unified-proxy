@@ -23,10 +23,12 @@ import (
 var errNoEnabledAPIKeys = errors.New("no enabled API keys in the key pool")
 
 type persistedKeyFile struct {
-	Version    int                  `json:"version"`
-	Keys       []persistedAPIKey    `json:"keys"`
-	ClientKeys []persistedClientKey `json:"client_keys,omitempty"`
-	Settings   persistedKeySettings `json:"settings,omitempty"`
+	Version    int                     `json:"version"`
+	Providers  []apiProvider           `json:"providers,omitempty"`
+	Proxies    []persistedNetworkProxy `json:"network_proxies,omitempty"`
+	Keys       []persistedAPIKey       `json:"keys"`
+	ClientKeys []persistedClientKey    `json:"client_keys,omitempty"`
+	Settings   persistedKeySettings    `json:"settings,omitempty"`
 }
 
 type persistedClientKey struct {
@@ -54,10 +56,12 @@ type clientKeyView struct {
 }
 
 type persistedKeySettings struct {
-	SelectionMode string `json:"selection_mode,omitempty"`
+	SelectionMode    string `json:"selection_mode,omitempty"`
+	NetworkProxyPool bool   `json:"network_proxy_pool,omitempty"`
 }
 
 type persistedAPIKey struct {
+	ProviderID           string    `json:"provider_id,omitempty"`
 	ID                   string    `json:"id"`
 	Name                 string    `json:"name"`
 	Enabled              bool      `json:"enabled"`
@@ -84,12 +88,18 @@ type persistedAPIKey struct {
 	MonthlySpendUSD      float64   `json:"monthly_spend_usd,omitempty"`
 	InputTokens          uint64    `json:"input_tokens,omitempty"`
 	OutputTokens         uint64    `json:"output_tokens,omitempty"`
+	ProxyMode            string    `json:"proxy_mode,omitempty"`
+	ProxyID              string    `json:"proxy_id,omitempty"`
 	APIProtocol          string    `json:"api_protocol,omitempty"`
 	BaseURL              string    `json:"base_url,omitempty"`
 	SpoofProfile         string    `json:"spoof_profile,omitempty"`
 }
 
 type apiKeyView struct {
+	ProviderID           string     `json:"provider_id,omitempty"`
+	ProviderName         string     `json:"provider_name,omitempty"`
+	NetworkBlocked       bool       `json:"network_blocked"`
+	ProviderBlocked      bool       `json:"provider_blocked"`
 	ID                   string     `json:"id"`
 	Name                 string     `json:"name"`
 	Enabled              bool       `json:"enabled"`
@@ -112,12 +122,15 @@ type apiKeyView struct {
 	OutputCostPerMillion float64    `json:"output_cost_per_million"`
 	InputTokens          uint64     `json:"input_tokens"`
 	OutputTokens         uint64     `json:"output_tokens"`
+	ProxyMode            string     `json:"proxy_mode"`
+	ProxyID              string     `json:"proxy_id,omitempty"`
 	APIProtocol          string     `json:"api_protocol"`
 	BaseURL              string     `json:"base_url,omitempty"`
 	SpoofProfile         string     `json:"spoof_profile,omitempty"`
 }
 
 type apiKeyPolicy struct {
+	ProviderID           *string  `json:"provider_id,omitempty"`
 	Priority             int      `json:"priority"`
 	Weight               int      `json:"weight"`
 	Models               []string `json:"models"`
@@ -125,12 +138,16 @@ type apiKeyPolicy struct {
 	MonthlyBudgetUSD     float64  `json:"monthly_budget_usd"`
 	InputCostPerMillion  float64  `json:"input_cost_per_million"`
 	OutputCostPerMillion float64  `json:"output_cost_per_million"`
+	ProxyMode            string   `json:"proxy_mode"`
+	ProxyID              string   `json:"proxy_id"`
 	APIProtocol          string   `json:"api_protocol"`
 	BaseURL              string   `json:"base_url"`
 	SpoofProfile         string   `json:"spoof_profile"`
 }
 
 type selectedAPIKey struct {
+	ProxyMode    string
+	NetworkProxy *selectedNetworkProxy
 	ID           string
 	Name         string
 	Key          string
@@ -143,6 +160,8 @@ type apiKeyStore struct {
 	mu         sync.Mutex
 	path       string
 	aead       cipher.AEAD
+	providers  []apiProvider
+	proxies    []persistedNetworkProxy
 	keys       []persistedAPIKey
 	clientKeys []persistedClientKey
 	next       uint64
@@ -203,6 +222,12 @@ func (store *apiKeyStore) load() error {
 	if file.Version != 1 && file.Version != 2 {
 		return fmt.Errorf("unsupported key store version %d", file.Version)
 	}
+	if err := store.validateProviderFile(file); err != nil {
+		return err
+	}
+	if err := store.validateProxyFile(file); err != nil {
+		return err
+	}
 	for i := range file.Keys {
 		normalizeKeyPolicy(&file.Keys[i])
 		if _, err := store.decrypt(file.Keys[i]); err != nil {
@@ -215,8 +240,14 @@ func (store *apiKeyStore) load() error {
 		}
 	}
 	store.keys = file.Keys
+	store.providers = file.Providers
+	store.proxies = file.Proxies
 	store.clientKeys = file.ClientKeys
 	store.settings = file.Settings
+	if len(store.proxies) > 0 {
+		store.settings.NetworkProxyPool = true
+	}
+	store.rebalanceProxiesLocked()
 	return nil
 }
 
@@ -227,7 +258,7 @@ func (store *apiKeyStore) saveLocked() error {
 	if err := os.MkdirAll(filepath.Dir(store.path), 0o700); err != nil {
 		return fmt.Errorf("create key store directory: %w", err)
 	}
-	file := persistedKeyFile{Version: 2, Keys: store.keys, ClientKeys: store.clientKeys, Settings: store.settings}
+	file := persistedKeyFile{Version: 2, Providers: store.providers, Proxies: store.proxies, Keys: store.keys, ClientKeys: store.clientKeys, Settings: store.settings}
 	raw, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return err
@@ -355,18 +386,33 @@ func (store *apiKeyStore) addWithPolicy(name, key string, enabled bool, policy a
 		DailyRequestLimit: policy.DailyRequestLimit, MonthlyBudgetUSD: policy.MonthlyBudgetUSD,
 		InputCostPerMillion: policy.InputCostPerMillion, OutputCostPerMillion: policy.OutputCostPerMillion,
 		BaseURL: strings.TrimRight(strings.TrimSpace(policy.BaseURL), "/"), SpoofProfile: strings.ToLower(strings.TrimSpace(policy.SpoofProfile)),
-		APIProtocol: policy.APIProtocol,
+		APIProtocol: policy.APIProtocol, ProxyMode: policy.ProxyMode, ProxyID: policy.ProxyID,
 	}
+	if policy.ProviderID != nil {
+		record.ProviderID = *policy.ProviderID
+	}
+	if record.ProviderID != "" && store.providerIndexLocked(record.ProviderID) < 0 {
+		return apiKeyView{}, errors.New("provider not found")
+	}
+	clearProviderOverrides(&record)
 	if err := validateKeyPolicy(record); err != nil {
 		return apiKeyView{}, err
 	}
+	if record.ProxyMode == "fixed" && store.proxyIndexLocked(record.ProxyID) < 0 {
+		return apiKeyView{}, errors.New("network proxy not found")
+	}
+	if record.ProxyMode != "fixed" {
+		record.ProxyID = ""
+	}
+	oldKeys := append([]persistedAPIKey(nil), store.keys...)
 	normalizeKeyPolicy(&record)
 	store.keys = append(store.keys, record)
+	store.rebalanceProxiesLocked()
 	if err := store.saveLocked(); err != nil {
-		store.keys = store.keys[:len(store.keys)-1]
+		store.keys = oldKeys
 		return apiKeyView{}, err
 	}
-	return keyView(record), nil
+	return store.keyViewLocked(store.keys[len(store.keys)-1]), nil
 }
 
 func (store *apiKeyStore) list() ([]apiKeyView, error) {
@@ -377,7 +423,7 @@ func (store *apiKeyStore) list() ([]apiKeyView, error) {
 	}
 	views := make([]apiKeyView, 0, len(store.keys))
 	for _, record := range store.keys {
-		views = append(views, keyView(record))
+		views = append(views, store.keyViewLocked(record))
 	}
 	sort.Slice(views, func(i, j int) bool { return views[i].CreatedAt.Before(views[j].CreatedAt) })
 	return views, nil
@@ -398,7 +444,7 @@ func (store *apiKeyStore) status() apiKeyStoreStatus {
 		resetUsagePeriods(key, now)
 		if key.Enabled {
 			status.Enabled++
-			if keyAvailable(*key, nil, "", now) {
+			if store.keyEligibleLocked(*key, nil, "", "", now) && store.proxyAvailableLocked(*key) {
 				status.Available++
 			}
 		}
@@ -446,7 +492,7 @@ func (store *apiKeyStore) update(id string, name *string, enabled *bool) (apiKey
 		store.keys[index] = old
 		return apiKeyView{}, err
 	}
-	return keyView(store.keys[index]), nil
+	return store.keyViewLocked(store.keys[index]), nil
 }
 
 func (store *apiKeyStore) updatePolicy(id string, policy apiKeyPolicy) (apiKeyView, error) {
@@ -459,7 +505,14 @@ func (store *apiKeyStore) updatePolicy(id string, policy apiKeyPolicy) (apiKeyVi
 	if index < 0 {
 		return apiKeyView{}, os.ErrNotExist
 	}
+	oldKeys := append([]persistedAPIKey(nil), store.keys...)
 	old := store.keys[index]
+	if policy.ProviderID != nil {
+		if *policy.ProviderID != "" && store.providerIndexLocked(*policy.ProviderID) < 0 {
+			return apiKeyView{}, errors.New("provider not found")
+		}
+		store.keys[index].ProviderID = *policy.ProviderID
+	}
 	store.keys[index].Priority = policy.Priority
 	store.keys[index].Weight = policy.Weight
 	store.keys[index].Models = normalizeModels(policy.Models)
@@ -469,21 +522,39 @@ func (store *apiKeyStore) updatePolicy(id string, policy apiKeyPolicy) (apiKeyVi
 	store.keys[index].OutputCostPerMillion = policy.OutputCostPerMillion
 	store.keys[index].BaseURL = strings.TrimRight(strings.TrimSpace(policy.BaseURL), "/")
 	store.keys[index].SpoofProfile = strings.ToLower(strings.TrimSpace(policy.SpoofProfile))
+	if policy.ProxyMode != "" {
+		if !validProxyBinding(policy.ProxyMode, policy.ProxyID) {
+			store.keys[index] = old
+			return apiKeyView{}, errors.New("invalid proxy binding")
+		}
+		if policy.ProxyMode == "fixed" && store.proxyIndexLocked(policy.ProxyID) < 0 {
+			store.keys[index] = old
+			return apiKeyView{}, errors.New("network proxy not found")
+		}
+		store.keys[index].ProxyMode = policy.ProxyMode
+		if policy.ProxyMode == "fixed" {
+			store.keys[index].ProxyID = policy.ProxyID
+		} else if policy.ProxyMode == "direct" {
+			store.keys[index].ProxyID = ""
+		}
+	}
 	// Old clients do not send api_protocol: preserve the existing selection.
 	if policy.APIProtocol != "" {
 		store.keys[index].APIProtocol = policy.APIProtocol
 	}
+	clearProviderOverrides(&store.keys[index])
 	if err := validateKeyPolicy(store.keys[index]); err != nil {
 		store.keys[index] = old
 		return apiKeyView{}, err
 	}
 	normalizeKeyPolicy(&store.keys[index])
+	store.rebalanceProxiesLocked()
 	store.keys[index].UpdatedAt = time.Now().UTC()
 	if err := store.saveLocked(); err != nil {
-		store.keys[index] = old
+		store.keys = oldKeys
 		return apiKeyView{}, err
 	}
-	return keyView(store.keys[index]), nil
+	return store.keyViewLocked(store.keys[index]), nil
 }
 
 func (store *apiKeyStore) delete(id string) error {
@@ -498,6 +569,7 @@ func (store *apiKeyStore) delete(id string) error {
 	}
 	old := append([]persistedAPIKey(nil), store.keys...)
 	store.keys = append(store.keys[:index], store.keys[index+1:]...)
+	store.rebalanceProxiesLocked()
 	if store.next >= uint64(len(store.keys)) {
 		store.next = 0
 	}
@@ -535,7 +607,7 @@ func (store *apiKeyStore) selectNextCompatible(excluded map[string]bool, model s
 	for index := range store.keys {
 		record := &store.keys[index]
 		resetUsagePeriods(record, now)
-		if !keyAvailable(*record, excluded, model, now) || (requiredProtocol != "" && effectiveProtocol(record.APIProtocol) != requiredProtocol) {
+		if !store.proxyAvailableLocked(*record) || !store.keyEligibleLocked(*record, excluded, model, requiredProtocol, now) {
 			continue
 		}
 		if record.Priority > highestPriority {
@@ -589,7 +661,7 @@ func (store *apiKeyStore) selectNextCompatible(excluded map[string]bool, model s
 	if err := store.saveLocked(); err != nil {
 		return nil, err
 	}
-	return &selectedAPIKey{ID: record.ID, Name: record.Name, Key: plain, BaseURL: record.BaseURL, SpoofProfile: record.SpoofProfile, APIProtocol: effectiveProtocol(record.APIProtocol)}, nil
+	return store.selectedKeyLocked(*record, plain)
 }
 
 func (store *apiKeyStore) allKeyIDs() []string {
@@ -613,7 +685,7 @@ func (store *apiKeyStore) byID(id string) (*selectedAPIKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &selectedAPIKey{ID: id, Name: store.keys[index].Name, Key: plain, BaseURL: store.keys[index].BaseURL, SpoofProfile: store.keys[index].SpoofProfile, APIProtocol: effectiveProtocol(store.keys[index].APIProtocol)}, nil
+	return store.selectedKeyLocked(store.keys[index], plain)
 }
 
 func (store *apiKeyStore) recordResult(id string, status int, message string, cooldown time.Duration) {
@@ -665,14 +737,19 @@ func (store *apiKeyStore) enabledForProbe() ([]selectedAPIKey, error) {
 	}
 	result := make([]selectedAPIKey, 0)
 	for _, record := range store.keys {
-		if !record.Enabled {
+		_, providerEnabled := store.providerForKeyLocked(record)
+		if !record.Enabled || !providerEnabled || !store.proxyAvailableLocked(record) {
 			continue
 		}
 		plain, err := store.decrypt(record)
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, selectedAPIKey{ID: record.ID, Name: record.Name, Key: plain, BaseURL: record.BaseURL, SpoofProfile: record.SpoofProfile, APIProtocol: effectiveProtocol(record.APIProtocol)})
+		selected, err := store.selectedKeyLocked(record, plain)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *selected)
 	}
 	return result, nil
 }
@@ -683,7 +760,7 @@ func (store *apiKeyStore) exportBackup() ([]byte, error) {
 	if err := store.ready(); err != nil {
 		return nil, err
 	}
-	return json.MarshalIndent(persistedKeyFile{Version: 2, Keys: store.keys, ClientKeys: store.clientKeys, Settings: store.settings}, "", "  ")
+	return json.MarshalIndent(persistedKeyFile{Version: 2, Providers: store.providers, Proxies: store.proxies, Keys: store.keys, ClientKeys: store.clientKeys, Settings: store.settings}, "", "  ")
 }
 
 func (store *apiKeyStore) importBackup(raw []byte) error {
@@ -698,6 +775,12 @@ func (store *apiKeyStore) importBackup(raw []byte) error {
 	}
 	if file.Version != 1 && file.Version != 2 {
 		return fmt.Errorf("unsupported backup version %d", file.Version)
+	}
+	if err := store.validateProviderFile(file); err != nil {
+		return err
+	}
+	if err := store.validateProxyFile(file); err != nil {
+		return err
 	}
 	for i := range file.Keys {
 		normalizeKeyPolicy(&file.Keys[i])
@@ -714,13 +797,23 @@ func (store *apiKeyStore) importBackup(raw []byte) error {
 		}
 	}
 	old := store.keys
+	oldProviders := store.providers
+	oldProxies := store.proxies
 	oldClientKeys := store.clientKeys
 	oldSettings := store.settings
 	store.keys = file.Keys
+	store.providers = file.Providers
+	store.proxies = file.Proxies
 	store.clientKeys = file.ClientKeys
 	store.settings = file.Settings
+	if len(store.proxies) > 0 {
+		store.settings.NetworkProxyPool = true
+	}
+	store.rebalanceProxiesLocked()
 	if err := store.saveLocked(); err != nil {
 		store.keys = old
+		store.providers = oldProviders
+		store.proxies = oldProxies
 		store.clientKeys = oldClientKeys
 		store.settings = oldSettings
 		return err
@@ -912,6 +1005,18 @@ func (store *apiKeyStore) indexLocked(id string) int {
 	return -1
 }
 
+func (store *apiKeyStore) keyViewLocked(record persistedAPIKey) apiKeyView {
+	effective, providerEnabled := store.providerForKeyLocked(record)
+	view := keyView(effective)
+	view.ProviderBlocked = !providerEnabled
+	view.ProviderID = record.ProviderID
+	if i := store.providerIndexLocked(record.ProviderID); i >= 0 {
+		view.ProviderName = store.providers[i].Name
+	}
+	view.NetworkBlocked = !store.proxyAvailableLocked(record)
+	return view
+}
+
 func keyView(record persistedAPIKey) apiKeyView {
 	view := apiKeyView{
 		ID: record.ID, Name: record.Name, Enabled: record.Enabled, Mask: record.Mask,
@@ -922,7 +1027,7 @@ func keyView(record persistedAPIKey) apiKeyView {
 		MonthlyBudgetUSD: record.MonthlyBudgetUSD, MonthlySpendUSD: record.MonthlySpendUSD,
 		InputCostPerMillion: record.InputCostPerMillion, OutputCostPerMillion: record.OutputCostPerMillion,
 		InputTokens: record.InputTokens, OutputTokens: record.OutputTokens,
-		BaseURL: record.BaseURL, SpoofProfile: record.SpoofProfile, APIProtocol: effectiveProtocol(record.APIProtocol),
+		ProxyMode: record.ProxyMode, ProxyID: record.ProxyID, BaseURL: record.BaseURL, SpoofProfile: record.SpoofProfile, APIProtocol: effectiveProtocol(record.APIProtocol),
 	}
 	if !record.LastUsed.IsZero() {
 		lastUsed := record.LastUsed
@@ -947,6 +1052,9 @@ func normalizeKeyPolicy(record *persistedAPIKey) {
 }
 
 func validateKeyPolicy(record persistedAPIKey) error {
+	if !validProxyBinding(record.ProxyMode, record.ProxyID) {
+		return errors.New("invalid network proxy binding")
+	}
 	if !validProtocol(record.APIProtocol) {
 		return errors.New("api_protocol must be responses or chat-completions")
 	}

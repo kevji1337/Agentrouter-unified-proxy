@@ -2,6 +2,11 @@
 
 ## Добавление credentials
 
+Актуальный UI: сначала создайте Provider с URL/protocol/models во вкладке
+Providers, затем выберите его в API keys. Инструкция и точные правила model ownership:
+[providers.md](providers.md). Описанная ниже per-key конфигурация остаётся доступной
+через API и для старых unlinked records; новые UI credentials используют providers.
+
 1. Настройте `ADMIN_TOKEN`, независимый `KEY_STORE_SECRET` и persistent `/data`.
 2. Войдите в `/admin`, нажмите **Add key**.
 3. Укажите Display name, API key, Upstream Base URL, API protocol и Enabled.
@@ -81,6 +86,9 @@ Model allowlist содержит точные IDs (сравнение без у�
 - `pool-first`: сначала pool, затем совместимый default endpoint с входящим
   upstream credential.
 - `pool-only`: только encrypted pool; входящий upstream credential игнорируется.
+
+После включения managed network-proxy pool inbound/default fallback отключён:
+входящие ключи не имеют сохранённой сетевой привязки. Используйте stored keys.
 
 Клиентский `arp_` проверяется локально, не является upstream credential и не
 может fallback на анонимный default endpoint при пустом/недоступном pool.
@@ -211,8 +219,9 @@ store.** Для отката используйте отдельную копи�
 
 ## Архитектурные границы и дальнейшие работы
 
-Существующая сущность — API key + BaseURL + policy + protocol. Отдельная Provider
-сущность не нужна. `doUpstreamWithMeta` выбирает key, `upstreamSettings` получает
+Для общего model catalog добавлена Provider с URL/protocol/profile/models;
+API key хранит её reference, credential и свою routing/network policy. Старые
+unlinked записи сохраняют прежнюю модель API key + BaseURL + policy + protocol. `doUpstreamWithMeta` выбирает key, `upstreamSettings` получает
 настройки, `prepareUpstream` готовит endpoint/body для каждой попытки; существующие
 converters остаются источником Responses compatibility.
 
@@ -224,15 +233,7 @@ Responses/files/batches не переносятся между независи�
 Catalog `/models` не агрегирует все providers. Passthrough endpoints не получают
 нового capability detection. Эти расширения не реализованы в данной задаче.
 
-Network proxy — отдельная будущая настройка, не API upstream:
-
-- добавить optional reference сетевого маршрута к существующей key policy;
-- хранить proxy auth в encrypted credentials, отдельно от API keys;
-- выбирать/cache-ить `http.Transport` по network route перед отправкой;
-- сохранить `prepareUpstream`, routing, adapters и протоколы без изменений;
-- default transport по-прежнему работает без per-upstream proxy;
-- отдельные bounded connectivity probes, запрет redirects и secret-safe errors;
-- SOCKS5/CONNECT adapters и UI добавлять только вместе с соответствующими тестами.
-
-Никакие SOCKS5/HTTPS proxy settings, libraries, pools или rotation сейчас не
-добавлены. Существующее поведение Go transport с proxy environment не изменено.
+Network proxies реализованы отдельно от API upstream: HTTP/HTTPS CONNECT и
+SOCKS5, зашифрованная авторизация, fixed/direct/automatic key bindings и стабильное
+перераспределение. Протоколы и API adapters остаются независимыми от transport.
+Настройка, fail-closed поведение и ограничения: [network-proxies.md](network-proxies.md).

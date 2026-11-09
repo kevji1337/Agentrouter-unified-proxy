@@ -80,6 +80,24 @@
           "daily_request_limit": {
             "type": "integer",
             "minimum": 0
+          },
+          "proxy_mode": {
+            "type": "string",
+            "enum": [
+              "",
+              "auto",
+              "fixed",
+              "direct"
+            ],
+            "description": "Stable automatic binding, manual pin, or explicit direct; omitted policy update preserves binding."
+          },
+          "proxy_id": {
+            "type": "string",
+            "description": "Required for fixed binding; key views show effective automatic assignment."
+          },
+          "provider_id": {
+            "type": "string",
+            "description": "Existing provider ID. Linked keys inherit URL/protocol/profile/models. Omitted on policy update preserves reference; empty unlinks."
           }
         }
       },
@@ -117,8 +135,170 @@
           },
           "failures": {
             "type": "integer"
+          },
+          "proxy_mode": {
+            "type": "string",
+            "enum": [
+              "",
+              "auto",
+              "fixed",
+              "direct"
+            ],
+            "description": "Stable automatic binding, manual pin, or explicit direct; omitted policy update preserves binding."
+          },
+          "proxy_id": {
+            "type": "string",
+            "description": "Required for fixed binding; key views show effective automatic assignment."
+          },
+          "provider_id": {
+            "type": "string",
+            "description": "Existing provider ID. Linked keys inherit URL/protocol/profile/models. Omitted on policy update preserves reference; empty unlinks."
+          },
+          "provider_name": {
+            "type": "string"
+          },
+          "network_blocked": {
+            "type": "boolean",
+            "description": "Assigned network route disabled or absent"
+          },
+          "provider_blocked": {
+            "type": "boolean",
+            "description": "Linked provider disabled or absent"
           }
         }
+      },
+      "NetworkProxyInput": {
+        "type": "object",
+        "required": [
+          "name",
+          "url"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "url": {
+            "type": "string",
+            "description": "http(s)://host:port or socks5://host:port, no userinfo/path/query/fragment"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "username": {
+            "type": "string",
+            "writeOnly": true,
+            "maxLength": 255
+          },
+          "password": {
+            "type": "string",
+            "writeOnly": true,
+            "maxLength": 255
+          }
+        },
+        "description": "Create defaults enabled=true. Edit requires name/url; omitted auth preserves it. Empty username/password clears auth."
+      },
+      "NetworkProxyView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "has_auth": {
+            "type": "boolean"
+          },
+          "assigned_keys": {
+            "type": "integer"
+          },
+          "last_checked": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_error": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderInput": {
+        "type": "object",
+        "required": [
+          "name",
+          "base_url"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "api_protocol": {
+            "type": "string",
+            "enum": [
+              "responses",
+              "chat-completions"
+            ],
+            "default": "responses"
+          },
+          "spoof_profile": {
+            "type": "string",
+            "enum": [
+              "",
+              "generic",
+              "claude-code",
+              "codex"
+            ]
+          },
+          "models": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "description": "Explicit model IDs, no wildcard/whitespace. Empty permits no generation models. Models registered here cannot route to legacy keys."
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "description": "Full shared settings replacement. Omitted enabled preserves previous value on edit. Omitted models clears catalog."
+      },
+      "ProviderView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProviderInput"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "keys": {
+                "type": "integer"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        ]
       }
     }
   },
@@ -442,6 +622,313 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Admin role required"
+          }
+        }
+      }
+    },
+    "/api/admin/network-proxies": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "get": {
+        "security": [
+          {
+            "adminSession": []
+          }
+        ],
+        "summary": "List safe network proxy views",
+        "responses": {
+          "200": {
+            "description": "data array; no plaintext proxy username/password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/NetworkProxyView"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "security": [
+          {
+            "adminSession": []
+          }
+        ],
+        "summary": "Add encrypted network proxy and rebalance automatic keys",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NetworkProxyInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created proxy id"
+          },
+          "400": {
+            "description": "Invalid endpoint, duplicate name/endpoint or auth"
+          },
+          "403": {
+            "description": "Admin role required"
+          }
+        }
+      }
+    },
+    "/api/admin/network-proxies/{id}": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "patch": {
+        "security": [
+          {
+            "adminSession": []
+          }
+        ],
+        "summary": "Edit proxy and rebalance without interrupting requests",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NetworkProxyInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated proxy id"
+          },
+          "400": {
+            "description": "Invalid configuration"
+          },
+          "403": {
+            "description": "Admin role required"
+          }
+        }
+      },
+      "delete": {
+        "security": [
+          {
+            "adminSession": []
+          }
+        ],
+        "summary": "Delete proxy; manual pins must be reassigned first",
+        "responses": {
+          "204": {
+            "description": "Deleted; automatic bindings redistributed"
+          },
+          "400": {
+            "description": "Pinned keys prevent deletion"
+          },
+          "403": {
+            "description": "Admin role required"
+          }
+        }
+      }
+    },
+    "/api/admin/network-proxies/{id}/test": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "security": [
+          {
+            "adminSession": []
+          }
+        ],
+        "summary": "Probe HTTP(S) target through proxy without API credentials",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "target_url": {
+                    "type": "string",
+                    "description": "Default UPSTREAM_URL; obeys UPSTREAM_ALLOWED_ORIGINS"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "ok/status/message/duration_ms. HTTP response other than 407 means a response was received, not that upstream generation works."
+          },
+          "403": {
+            "description": "Admin role required"
+          }
+        }
+      }
+    },
+    "/api/admin/providers": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "get": {
+        "security": [
+          {
+            "adminSession": []
+          }
+        ],
+        "summary": "List providers and their explicit model catalogs",
+        "responses": {
+          "200": {
+            "description": "data array with shared settings and linked-key counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ProviderView"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "security": [
+          {
+            "adminSession": []
+          }
+        ],
+        "summary": "Create model-routing provider (admin role)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created provider"
+          },
+          "400": {
+            "description": "Invalid provider URL/protocol/model ID or duplicate name"
+          },
+          "403": {
+            "description": "Admin role required"
+          }
+        }
+      }
+    },
+    "/api/admin/providers/{id}": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "patch": {
+        "security": [
+          {
+            "adminSession": []
+          }
+        ],
+        "summary": "Update shared provider settings for future key selections",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated provider"
+          },
+          "400": {
+            "description": "Invalid settings"
+          },
+          "403": {
+            "description": "Admin role required"
+          }
+        }
+      },
+      "delete": {
+        "security": [
+          {
+            "adminSession": []
+          }
+        ],
+        "summary": "Delete provider with no linked keys",
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "400": {
+            "description": "Reassign linked keys before deleting"
           },
           "403": {
             "description": "Admin role required"

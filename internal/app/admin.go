@@ -75,6 +75,21 @@ func (server *proxyServer) handleAdminAPI(w http.ResponseWriter, r *http.Request
 		server.handleAdminBackup(w, r)
 	case r.URL.Path == "/api/admin/logs":
 		server.handleAdminLogs(w, r)
+	case r.URL.Path == "/api/admin/providers":
+		server.handleAdminProviders(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/admin/providers/"):
+		server.handleAdminProvider(w, r, strings.TrimPrefix(r.URL.Path, "/api/admin/providers/"))
+	case r.URL.Path == "/api/admin/network-proxies":
+		server.handleAdminNetworkProxies(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/admin/network-proxies/"):
+		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/admin/network-proxies/"), "/")
+		if len(parts) == 1 && parts[0] != "" {
+			server.handleAdminNetworkProxy(w, r, parts[0], false)
+		} else if len(parts) == 2 && parts[1] == "test" {
+			server.handleAdminNetworkProxy(w, r, parts[0], true)
+		} else {
+			writeError(w, 404, "not_found", "network proxy endpoint not found")
+		}
 	case r.URL.Path == "/api/admin/keys":
 		server.handleAdminKeys(w, r)
 	case r.URL.Path == "/api/admin/client-keys":
@@ -199,12 +214,13 @@ func (server *proxyServer) handleAdminStatus(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")
 		return
 	}
-	present, _, updated, _ := server.cookies.status()
+	present, _, updated, _ := server.wafStatus()
 	lastKeyHealth, _ := server.lastKeyHealth.Load().(time.Time)
 	account := adminAccountFromContext(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "ok", "upstream": server.cfg.UpstreamURL.String(), "profile": server.cfg.Profile,
 		"upstream_api_protocol": effectiveProtocol(server.cfg.UpstreamProtocol),
+		"network_proxy_pool":    server.keys.networkPoolConfigured(),
 		"waf_cookie":            present, "waf_cookie_updated_at": optionalTime(updated),
 		"selection_mode": server.currentKeySelectionMode(), "key_failover": server.cfg.KeyFailover,
 		"key_cooldown":        server.cfg.KeyCooldown.String(),
@@ -373,6 +389,7 @@ func (server *proxyServer) handleAdminBackup(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusBadRequest, "invalid_backup", err.Error())
 			return
 		}
+		server.resetOutboundRoutes()
 		logEvent("info", "admin_backup_imported", nil)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	default:
@@ -410,6 +427,15 @@ func (server *proxyServer) handleAdminKeyTest(w http.ResponseWriter, r *http.Req
 
 func (server *proxyServer) validateAdminPolicy(policy apiKeyPolicy) error {
 	raw := policy.BaseURL
+	if policy.ProviderID != nil && *policy.ProviderID != "" {
+		for _, p := range server.keys.listProviders() {
+			if p.ID == *policy.ProviderID {
+				_, err := server.validateUpstreamURL(p.BaseURL)
+				return err
+			}
+		}
+		return errors.New("provider not found")
+	}
 	if strings.TrimSpace(raw) == "" {
 		raw = server.cfg.UpstreamURL.String()
 	}
@@ -419,7 +445,7 @@ func (server *proxyServer) validateAdminPolicy(policy apiKeyPolicy) error {
 
 // Models is optional. Do not send a billed generation as a health probe.
 func probeInconclusive(status int) bool {
-	return status == http.StatusNotFound || status == http.StatusMethodNotAllowed || status == http.StatusNotImplemented
+	return status == 0 || status == http.StatusNotFound || status == http.StatusMethodNotAllowed || status == http.StatusNotImplemented
 }
 
 func (server *proxyServer) probeAPIKey(ctx context.Context, key selectedAPIKey) (int, string) {
@@ -430,22 +456,34 @@ func (server *proxyServer) probeAPIKey(ctx context.Context, key selectedAPIKey) 
 		return http.StatusBadGateway, "invalid or disallowed upstream URL"
 	}
 	wafEnabled := server.usesWAFCookies(baseURL, profile)
+	route, err := server.outboundRoute(&key)
+	if err != nil {
+		return 0, "assigned network route unavailable"
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.upstreamURLFor(baseURL, "/v1/models"), nil)
 	if err != nil {
 		return http.StatusBadGateway, "upstream request failed"
 	}
 	req.Header = spoofHeaders(profile)
 	req.Header.Set("Authorization", "Bearer "+key.Key)
-	if cookie := server.cookies.header(); cookie != "" && wafEnabled {
+	if cookie := route.cookies.header(); cookie != "" && wafEnabled {
 		req.Header.Set("Cookie", cookie)
 	}
-	resp, err := server.client.Do(req)
+	resp, err := route.client.Do(req)
 	if err != nil {
+		if key.NetworkProxy != nil {
+			server.keys.recordProxyProbe(key.NetworkProxy.ID, false)
+			return 0, "network proxy connection failed"
+		}
 		return http.StatusBadGateway, "upstream connection failed"
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == 407 && key.NetworkProxy != nil {
+		server.keys.recordProxyProbe(key.NetworkProxy.ID, false)
+		return 0, "network proxy authentication failed"
+	}
 	if wafEnabled {
-		server.cookies.capture(resp.Header)
+		route.cookies.capture(resp.Header)
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {

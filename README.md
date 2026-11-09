@@ -9,16 +9,27 @@
 - spoof-профили `claude-code` / `codex`;
 - получение и ротацию WAF-cookie AgentRouter.
 
-Каждый stored API key имеет собственные Base URL, protocol и policy. Chat-запрос
-идёт нативно на Chat upstream либо через существующий Responses adapter.
+Provider задаёт Base URL, protocol и список моделей; API-ключ выбирает существующего
+провайдера и хранит credential, routing policy и network route. Старые unlinked
+ключи сохраняют собственные настройки. Chat-запрос идёт нативно на Chat upstream
+либо через существующий Responses adapter.
 Входящие credentials используются только с default upstream в legacy режиме.
 
 Подробная инструкция, ограничения безопасности, обновление и откат:
 [`docs/multi-upstream.md`](docs/multi-upstream.md).
 
+Исходящие HTTP/HTTPS CONNECT и SOCKS5 прокси, привязки ключей и автоматическое
+перераспределение: [`docs/network-proxies.md`](docs/network-proxies.md).
+Панель разделена на Overview, Providers, API keys, Network proxies, Client access и Events.
+Привязка моделей к API и выбор провайдера при добавлении ключа:
+[`docs/providers.md`](docs/providers.md).
+
 ## Возможности
 
 - один статический Go-бинарник без runtime-зависимостей;
+- исходящие HTTP/HTTPS/SOCKS5 network proxies с encrypted auth и stable key bindings;
+- автоматическое распределение ключей с минимальными перемещениями, без hard limit;
+- Providers с явным model catalog: зарегистрированная модель идёт только к её провайдерам;
 - `POST /v1/chat/completions` и `POST /v1/responses`;
 - `GET /v1/models` и alias `GET /models`;
 - SSE с немедленным flush и idle-timeout;
@@ -117,7 +128,12 @@ http://127.0.0.1:8080/v1/responses
 | `PATCH/DELETE` | `/api/admin/keys/{id}` | Включение, переименование и удаление |
 | `POST` | `/api/admin/keys/{id}/test` | Проверка ключа через upstream |
 | `PATCH` | `/api/admin/keys/{id}/policy` | Priority, weight, models, limits и pricing |
-| `GET/POST` | `/api/admin/backup` | Encrypted export/import key store |
+| `GET/POST` | `/api/admin/backup` | Encrypted export/import keys, proxies и bindings |
+| `GET/POST` | `/api/admin/providers` | Список/создание API providers и model catalogs |
+| `PATCH/DELETE` | `/api/admin/providers/{id}` | Изменение общего URL/protocol/models и удаление |
+| `GET/POST` | `/api/admin/network-proxies` | Список и добавление сетевых proxy |
+| `PATCH/DELETE` | `/api/admin/network-proxies/{id}` | Изменение/удаление и автоматическое перераспределение |
+| `POST` | `/api/admin/network-proxies/{id}/test` | Bounded connectivity probe без API credential |
 | `GET` | `/api/admin/logs` | Live audit/request events |
 | `PATCH` | `/api/admin/settings` | Runtime routing mode |
 | `GET/POST` | `/api/admin/client-keys` | Список и генерация клиентских API keys |
@@ -224,7 +240,10 @@ docker run -d --name agentrouter-unified-proxy --restart unless-stopped `
 
 Откройте `http://127.0.0.1:8080/admin` и введите `ADMIN_TOKEN`. Панель позволяет:
 
-- добавлять credentials с названием, Base URL, API protocol, profile и enabled при создании;
+- добавлять providers с названием, Base URL, API protocol, profile и явными моделями;
+- выбирать готового провайдера, network route и enabled при добавлении credentials;
+- управлять HTTP/HTTPS/SOCKS5 proxy endpoints и зашифрованными логином/паролем;
+- выбирать automatic, pinned или direct route для каждого upstream key;
 - включать, выключать и удалять;
 - проверять подключение через optional upstream `/v1/models` (404/405/501 = inconclusive, не failure);
 - задавать priority, weight и model allowlist;
@@ -267,6 +286,11 @@ Authorization: Bearer arp_...
 - `inbound-first` — ключ IDE имеет приоритет; pool используется, если его нет;
 - `pool-first` — сначала enabled key из pool, затем входящий ключ;
 - `pool-only` — входящий `Authorization` игнорируется, используется только pool.
+
+После добавления первого managed network proxy default/inbound fallback отключён:
+используйте stored credentials с сетевыми привязками. Если все proxy отключены,
+automatic keys возвращают `network_proxy_unavailable`, а не выходят напрямую.
+Direct access можно разрешить явно в key policy.
 
 В pool используется weighted round-robin. При `KEY_FAILOVER=true` ответы
 401/402/429 переключают текущий запрос на следующий совместимый key, включая
