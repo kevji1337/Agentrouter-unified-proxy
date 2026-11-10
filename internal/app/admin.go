@@ -82,17 +82,25 @@ func (server *proxyServer) handleAdminAPI(w http.ResponseWriter, r *http.Request
 		return
 	}
 	account, err := server.authenticateAdmin(r)
+	if errors.Is(err, errAdminCSRF) {
+		writeError(w, http.StatusForbidden, "admin_csrf_required", err.Error())
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "admin_auth_required", err.Error())
 		return
 	}
-	if r.Method != http.MethodGet && account.Role != "admin" {
+	if r.Method != http.MethodGet && account.Role != "admin" && r.URL.Path != "/api/admin/password" && r.URL.Path != "/api/admin/logout" {
 		writeError(w, http.StatusForbidden, "admin_role_required", "administrator role required")
 		return
 	}
 	r = r.WithContext(withAdminAccount(r.Context(), account))
 
 	switch {
+	case r.URL.Path == "/api/admin/password":
+		server.handleAdminPassword(w, r, account)
+	case r.URL.Path == "/api/admin/logout":
+		server.handleAdminLogout(w, r)
 	case r.URL.Path == "/api/admin/status":
 		server.handleAdminStatus(w, r)
 	case r.URL.Path == "/api/admin/settings":
@@ -209,30 +217,65 @@ func (server *proxyServer) handleAdminClientKey(w http.ResponseWriter, r *http.R
 
 func (server *proxyServer) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use POST")
+		writeError(w, 405, "method_not_allowed", "use POST")
+		return
+	}
+	if !server.allowAdminLogin(r) {
+		w.Header().Set("Retry-After", "60")
+		writeError(w, 429, "admin_login_rate_limited", "too many login attempts; retry in a minute")
 		return
 	}
 	var input struct {
-		Token string `json:"token"`
-		TOTP  string `json:"totp"`
+		Token       string `json:"token"`
+		Name        string `json:"name"`
+		Password    string `json:"password"`
+		TOTP        string `json:"totp"`
+		Remember    bool   `json:"remember"`
+		Browser     bool   `json:"browser"`
+		NewPassword string `json:"new_password"`
 	}
-	if err := decodeAdminJSON(w, r, &input); err != nil {
+	if decodeAdminJSON(w, r, &input) != nil {
 		return
 	}
-	probe := r.Clone(r.Context())
-	probe.Header = r.Header.Clone()
-	probe.Header.Set("X-Admin-Token", input.Token)
-	probe.Header.Set("X-Admin-TOTP", input.TOTP)
-	account, err := server.authenticateAdmin(probe)
+	if (input.Browser || input.NewPassword != "") && !cookieMutationAllowed(r) {
+		writeError(w, 403, "admin_csrf_required", "same-origin admin request required")
+		return
+	}
+	account, err := server.authenticateAdminCredentials(input.Name, input.Password, input.Token, input.TOTP)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "admin_auth_required", err.Error())
+		writeError(w, 401, "admin_auth_required", err.Error())
 		return
 	}
-	session, expires := server.createAdminSession(account)
+	_, passwordSet := server.keys.adminPassword(account)
+	if input.NewPassword != "" {
+		if passwordSet {
+			writeError(w, 400, "admin_password_exists", "use account settings to change existing password")
+			return
+		}
+		if err := server.keys.setAdminPassword(account, input.NewPassword); err != nil {
+			writeError(w, 400, "admin_password_invalid", err.Error())
+			return
+		}
+		passwordSet = true
+	}
+	if input.Browser {
+		id, expires, err := server.keys.saveBrowserSession(account, input.Remember)
+		if err != nil {
+			writeError(w, 503, "admin_session_store_unavailable", "persistent admin sessions require an unlocked key store")
+			return
+		}
+		if old, e := r.Cookie(adminSessionCookie); e == nil {
+			_ = server.keys.revokeBrowserSession(old.Value)
+		}
+		http.SetCookie(w, browserCookie(r, id, expires, input.Remember))
+		logEvent("info", "admin_login", map[string]any{"admin": account.Name, "role": account.Role})
+		writeJSON(w, 200, map[string]any{"expires_at": expires, "admin": map[string]any{"name": account.Name, "role": account.Role}, "password_set": passwordSet})
+		return
+	}
+	// Existing API clients can still request the legacy 12h header session.
+	id, expires := server.createAdminSession(account)
 	logEvent("info", "admin_login", map[string]any{"admin": account.Name, "role": account.Role})
-	writeJSON(w, http.StatusOK, map[string]any{
-		"session": session, "expires_at": expires, "admin": map[string]any{"name": account.Name, "role": account.Role},
-	})
+	writeJSON(w, 200, map[string]any{"session": id, "expires_at": expires, "admin": map[string]any{"name": account.Name, "role": account.Role}, "password_set": passwordSet})
 }
 
 func (server *proxyServer) handleAdminStatus(w http.ResponseWriter, r *http.Request) {
@@ -243,6 +286,7 @@ func (server *proxyServer) handleAdminStatus(w http.ResponseWriter, r *http.Requ
 	present, _, updated, _ := server.wafStatus()
 	lastKeyHealth, _ := server.lastKeyHealth.Load().(time.Time)
 	account := adminAccountFromContext(r.Context())
+	_, passwordSet := server.keys.adminPassword(account)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "ok", "upstream": server.cfg.UpstreamURL.String(), "profile": server.cfg.Profile,
 		"upstream_api_protocol": effectiveProtocol(server.cfg.UpstreamProtocol),
@@ -254,7 +298,7 @@ func (server *proxyServer) handleAdminStatus(w http.ResponseWriter, r *http.Requ
 		"store": server.keys.status(), "force_sequential_tools": server.cfg.ForceSequentialTools,
 		"stateless_responses": server.cfg.StatelessResponses,
 		"infrastructure":      server.infra.health(),
-		"admin":               map[string]any{"name": account.Name, "role": account.Role},
+		"admin":               map[string]any{"name": account.Name, "role": account.Role, "password_set": passwordSet},
 	})
 }
 

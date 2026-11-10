@@ -1,9 +1,18 @@
+# syntax=docker/dockerfile:1
+
 FROM golang:1.26-alpine AS build
 WORKDIR /src
+ENV CGO_ENABLED=0 GOOS=linux GOCACHE=/root/.cache/go-build
+
+# Source/UI changes reuse this dependency layer, including cached registry builds.
 COPY go.mod go.sum ./
+RUN go mod download
+
 COPY cmd ./cmd
 COPY internal ./internal
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/proxy ./cmd/proxy
+# Incremental compilation survives source changes on the same BuildKit builder.
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/proxy ./cmd/proxy
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates && addgroup -S proxy && adduser -S -G proxy proxy \

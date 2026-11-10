@@ -287,3 +287,9 @@ func (infra *infrastructure) loadAdminSession(ctx context.Context, id string) (a
 	}
 	return session, true
 }
+
+func (infra *infrastructure) deleteAdminSession(ctx context.Context, id string) {
+	if infra != nil && infra.redis != nil {
+		_ = infra.redis.Del(ctx, "agentrouter:admin-session:"+id).Err()
+	}
+}

@@ -1,9 +1,13 @@
-.git
-.env
-*.exe
-coverage.out
-README.md
-data
-keys.json
-docs
-deploy
+# Send only production build inputs. Excludes .delta worktrees, credentials,
+# local data, browser smoke output and other unrelated files from the context.
+**
+!Dockerfile
+!go.mod
+!go.sum
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+
+# Tests are validated in CI, not compiled into the production binary.
+**/*_test.go

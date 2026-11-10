@@ -23,12 +23,14 @@ import (
 var errNoEnabledAPIKeys = errors.New("no enabled API keys in the key pool")
 
 type persistedKeyFile struct {
-	Version    int                     `json:"version"`
-	Providers  []apiProvider           `json:"providers,omitempty"`
-	Proxies    []persistedNetworkProxy `json:"network_proxies,omitempty"`
-	Keys       []persistedAPIKey       `json:"keys"`
-	ClientKeys []persistedClientKey    `json:"client_keys,omitempty"`
-	Settings   persistedKeySettings    `json:"settings,omitempty"`
+	AdminPasswords []savedAdminPassword    `json:"admin_passwords,omitempty"`
+	AdminSessions  []savedAdminSession     `json:"admin_sessions,omitempty"`
+	Version        int                     `json:"version"`
+	Providers      []apiProvider           `json:"providers,omitempty"`
+	Proxies        []persistedNetworkProxy `json:"network_proxies,omitempty"`
+	Keys           []persistedAPIKey       `json:"keys"`
+	ClientKeys     []persistedClientKey    `json:"client_keys,omitempty"`
+	Settings       persistedKeySettings    `json:"settings,omitempty"`
 }
 
 type persistedClientKey struct {
@@ -160,18 +162,20 @@ type selectedAPIKey struct {
 }
 
 type apiKeyStore struct {
-	mu         sync.Mutex
-	path       string
-	aead       cipher.AEAD
-	providers  []apiProvider
-	proxies    []persistedNetworkProxy
-	keys       []persistedAPIKey
-	clientKeys []persistedClientKey
-	next       uint64
-	loadErr    error
-	readOnly   bool
-	settings   persistedKeySettings
-	saveHook   func([]byte) error
+	adminPasswords     []savedAdminPassword
+	savedAdminSessions []savedAdminSession
+	mu                 sync.Mutex
+	path               string
+	aead               cipher.AEAD
+	providers          []apiProvider
+	proxies            []persistedNetworkProxy
+	keys               []persistedAPIKey
+	clientKeys         []persistedClientKey
+	next               uint64
+	loadErr            error
+	readOnly           bool
+	settings           persistedKeySettings
+	saveHook           func([]byte) error
 }
 
 type apiKeyStoreStatus struct {
@@ -225,6 +229,9 @@ func (store *apiKeyStore) load() error {
 	if file.Version != 1 && file.Version != 2 {
 		return fmt.Errorf("unsupported key store version %d", file.Version)
 	}
+	if err := validateAdminAccessFile(file); err != nil {
+		return err
+	}
 	if err := store.validateProviderFile(file); err != nil {
 		return err
 	}
@@ -242,6 +249,8 @@ func (store *apiKeyStore) load() error {
 			return fmt.Errorf("decrypt client key %q: check KEY_STORE_SECRET: %w", clientKey.Name, err)
 		}
 	}
+	store.adminPasswords = file.AdminPasswords
+	store.savedAdminSessions = file.AdminSessions
 	store.keys = file.Keys
 	store.providers = file.Providers
 	store.proxies = file.Proxies
@@ -261,7 +270,7 @@ func (store *apiKeyStore) saveLocked() error {
 	if err := os.MkdirAll(filepath.Dir(store.path), 0o700); err != nil {
 		return fmt.Errorf("create key store directory: %w", err)
 	}
-	file := persistedKeyFile{Version: 2, Providers: store.providers, Proxies: store.proxies, Keys: store.keys, ClientKeys: store.clientKeys, Settings: store.settings}
+	file := persistedKeyFile{AdminPasswords: store.adminPasswords, AdminSessions: store.savedAdminSessions, Version: 2, Providers: store.providers, Proxies: store.proxies, Keys: store.keys, ClientKeys: store.clientKeys, Settings: store.settings}
 	raw, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return err
@@ -791,10 +800,16 @@ func (store *apiKeyStore) exportBackup() ([]byte, error) {
 	if err := store.ready(); err != nil {
 		return nil, err
 	}
-	return json.MarshalIndent(persistedKeyFile{Version: 2, Providers: store.providers, Proxies: store.proxies, Keys: store.keys, ClientKeys: store.clientKeys, Settings: store.settings}, "", "  ")
+	return json.MarshalIndent(persistedKeyFile{AdminPasswords: store.adminPasswords, Version: 2, Providers: store.providers, Proxies: store.proxies, Keys: store.keys, ClientKeys: store.clientKeys, Settings: store.settings}, "", "  ")
 }
 
 func (store *apiKeyStore) importBackup(raw []byte) error {
+	return store.importState(raw, false)
+}
+
+// Startup state hydration is not an operator backup restore: keep current
+// browser sessions across a PostgreSQL-backed deployment.
+func (store *apiKeyStore) importState(raw []byte, restoreSessions bool) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := store.ready(); err != nil {
@@ -806,6 +821,9 @@ func (store *apiKeyStore) importBackup(raw []byte) error {
 	}
 	if file.Version != 1 && file.Version != 2 {
 		return fmt.Errorf("unsupported backup version %d", file.Version)
+	}
+	if err := validateAdminAccessFile(file); err != nil {
+		return err
 	}
 	if err := store.validateProviderFile(file); err != nil {
 		return err
@@ -827,11 +845,17 @@ func (store *apiKeyStore) importBackup(raw []byte) error {
 			return fmt.Errorf("backup client key cannot be decrypted with current KEY_STORE_SECRET: %w", err)
 		}
 	}
+	oldPasswords, oldSessions := store.adminPasswords, store.savedAdminSessions
 	old := store.keys
 	oldProviders := store.providers
 	oldProxies := store.proxies
 	oldClientKeys := store.clientKeys
 	oldSettings := store.settings
+	store.adminPasswords = file.AdminPasswords
+	store.savedAdminSessions = nil
+	if restoreSessions {
+		store.savedAdminSessions = file.AdminSessions
+	}
 	store.keys = file.Keys
 	store.providers = file.Providers
 	store.proxies = file.Proxies
@@ -842,6 +866,7 @@ func (store *apiKeyStore) importBackup(raw []byte) error {
 	}
 	store.rebalanceProxiesLocked()
 	if err := store.saveLocked(); err != nil {
+		store.adminPasswords, store.savedAdminSessions = oldPasswords, oldSessions
 		store.keys = old
 		store.providers = oldProviders
 		store.proxies = oldProxies

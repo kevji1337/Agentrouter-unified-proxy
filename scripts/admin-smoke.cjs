@@ -20,6 +20,7 @@ if (!chrome) throw Error('Chrome/Chromium is required (set CHROME_BIN)');
 const fixture = String.raw`
 sessionStorage.setItem('ar_admin_session', 'fixture');
 const requests = [];
+let browserAuthenticated=true;
 const providers = [
  {id:'provider_a', name:'Provider A', base_url:'https://api-a.example/v1', api_protocol:'chat-completions', spoof_profile:'generic', enabled:true, models:['model-a','model-shared'], keys:2},
  {id:'provider_b', name:'Provider B', base_url:'https://api-b.example/api/v1', api_protocol:'responses', spoof_profile:'generic', enabled:true, models:['model-b','model-shared'], keys:1},
@@ -40,8 +41,12 @@ window.prompt = () => 'https://probe.example';
 window.addEventListener('error', e => document.body.dataset.smokeError = e.message);
 window.fetch = async (url, options = {}) => {
  requests.push([url, options]);
- const status = {upstream:'https://agentrouter.org', admin:{role:'admin'}, store:{ready:true, available:25, total:25}, selection_mode:'pool-only', network_proxy_pool:true};
+ const status = {upstream:'https://agentrouter.org', admin:{name:'owner',role:'admin',password_set:true}, store:{ready:true, available:25, total:25}, selection_mode:'pool-only', network_proxy_pool:true};
  let data = {};
+ if(url==='/api/admin/logout'){browserAuthenticated=false;return {ok:true,status:204,json:async()=>({})};}
+ if(url==='/api/admin/login'){browserAuthenticated=true;return {ok:true,status:200,json:async()=>({password_set:true,admin:{name:'owner',role:'admin'}})};}
+ if(url==='/api/admin/password')return {ok:true,status:200,json:async()=>({password_set:true})};
+ if(!browserAuthenticated)return {ok:false,status:401,json:async()=>({error:{code:'admin_auth_required',message:'Sign in'}})};
  if (url.includes('/logs')) {const after=Number(new URL(url,'http://fixture').searchParams.get('after'));const rows=after===0?journal:journal.filter(item=>item.seq>after);data={data:rows,instance:journalInstance,next_after:rows.length?rows[rows.length-1].seq:after,has_more:false};}
  else if (url.includes('/status')) data = status;
  else if (url.includes('/providers')) data = {data:providers};
@@ -136,6 +141,32 @@ async function smoke() {
   assert(document.getElementById('logState').textContent.includes('сменился'), 'rolling deploy cursor recovery');
   assert(document.querySelectorAll('.log-entry').length === 6, 'new process events visible');
   assert(document.documentElement.scrollWidth <= innerWidth, 'journal responsive layout');
+  document.getElementById('lockBtn').click(); await pause();
+  assert(!document.getElementById('login').classList.contains('hidden'), 'logout shows login');
+  document.getElementById('adminName').value='owner';document.getElementById('adminPassword').value='fixture-password-long';
+  document.getElementById('loginForm').dispatchEvent(new Event('submit',{cancelable:true}));await pause();
+  assert(document.getElementById('login').classList.contains('hidden'), 'password login');
+  const login=requests.filter(([p])=>p==='/api/admin/login').at(-1);
+  assert(JSON.parse(login[1].body).browser===true && JSON.parse(login[1].body).remember===true,'remembered cookie login');
+  assert(document.getElementById('adminPassword').value==='','login password cleared');
+  assert(sessionStorage.getItem('ar_admin_session')===null,'no session bearer in browser storage');
+  document.getElementById('adminAccessBtn').click();
+  document.getElementById('currentAdminSecret').value='fixture-password-long';
+  document.getElementById('newAdminPassword').value='new-fixture-password-long';document.getElementById('confirmAdminPassword').value='different';
+  document.getElementById('adminPasswordForm').dispatchEvent(new Event('submit',{cancelable:true}));
+  assert(document.getElementById('passwordSetupError').textContent.includes('не совпадают'),'password confirmation');
+  document.getElementById('confirmAdminPassword').value='new-fixture-password-long';document.getElementById('adminPasswordForm').dispatchEvent(new Event('submit',{cancelable:true}));await pause();
+  assert(requests.some(([p])=>p==='/api/admin/password'),'password settings submission');
+  const mutation=requests.filter(([p])=>p==='/api/admin/password').at(-1);
+  assert(mutation[1].headers['X-Admin-CSRF']==='1' && !mutation[1].headers['X-Admin-Session'],'cookie mutation CSRF, no JS bearer');
+  document.getElementById('lockBtn').click();await pause();document.getElementById('tokenTab').click();
+  assert(document.getElementById('adminPassword').disabled && !document.getElementById('adminToken').disabled,'token tab disables hidden password');
+  document.getElementById('adminToken').value='fixture-admin-token';document.getElementById('initialPassword').value='bootstrap-fixture-password-long';document.getElementById('loginForm').dispatchEvent(new Event('submit',{cancelable:true}));await pause();
+  assert(JSON.parse(requests.filter(([p])=>p==='/api/admin/login').at(-1)[1].body).new_password==='bootstrap-fixture-password-long','first-login password setup');
+  assert(document.getElementById('adminToken').value==='','token cleared');
+  document.querySelector('[data-page="overview"]').click();await pause();document.getElementById('modeButton').click();
+  assert(document.getElementById('modeButton').getAttribute('aria-expanded')==='true','dropdown arrow state');
+  assert(getComputedStyle(document.querySelector('#modeButton .chevron')).borderRadius==='7px','styled dropdown arrow');
   document.body.dataset.smokeResult = 'passed';
  } catch (error) {
   document.body.dataset.smokeResult = 'failed: ' + error.message;
@@ -166,5 +197,5 @@ for (const width of [1280, 390]) {
  if (result.error || !outcome || outcome[1] !== 'passed' || runtimeError) {
   throw Error(`Chrome ${width}: ${result.error || (runtimeError && runtimeError[1]) || (outcome && outcome[1]) || 'smoke result missing'}`);
  }
- console.log(`Chrome ${width}px: provider models, credential editing, proxies, readable logs and filters passed`);
+ console.log(`Chrome ${width}px: provider models, credential editing, proxies, logs, password login and dropdown styling passed`);
 }

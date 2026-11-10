@@ -102,15 +102,39 @@ reverse proxy should reach it.
 
 ## 5. First login
 
-Open `/admin`, enter `ADMIN_TOKEN`, and add upstream credentials with their
+Open `/admin` over HTTPS, choose **Токен / первый вход**, enter `ADMIN_TOKEN` and
+optionally set a password. Future logins use `owner` + password or Remember me.
+See [admin-login.md](admin-login.md). Add upstream credentials with their
 Base URL and API protocol. AgentRouter defaults to Responses; custom providers
 can use native Chat Completions and generic profile. See [multi-upstream.md](multi-upstream.md)
 for routing, production origin restrictions, compatibility and safe rollback.
-The browser keeps the admin session ID in `sessionStorage`; the server never
-returns full stored upstream keys.
+New browser logins use HttpOnly Secure cookies, not sessionStorage tokens.
+Keep persistent `/data`/PostgreSQL state and the same secrets across deployments
+so remembered logins survive. The server never returns full stored upstream keys.
 
 ## Updating
 
 With automatic deployments enabled, a push to `main` triggers a rebuild. For a
 manual deployment, use Dokploy's Redeploy action. Keep the `/data` volume
 attached between deployments.
+
+### Faster Dockerfile rebuilds
+
+The Dockerfile separates `go mod download` from source compilation. Source/UI edits
+reuse the dependency layer when `go.mod`/`go.sum` are unchanged. BuildKit also keeps
+Go compilation artifacts in a cache mount, so a rebuild can reuse unchanged packages.
+The production context includes only `Dockerfile`, module manifests, `cmd` and
+`internal` (without Go tests). `.delta`, `.git`, env files, local key data and browser
+smoke outputs are not sent to the builder.
+
+Keep Docker/BuildKit cache enabled on the Dokploy build host. Reusing the same
+builder allows the compilation cache to survive deployments. Builds with `--no-cache`,
+a new builder or a pruned cache have to repopulate it; an exported image-layer cache
+alone does not guarantee that BuildKit cache-mount contents are restored. The first
+build still downloads dependencies and compiles them. No measured deployment speedup
+is claimed without timings on the actual host.
+
+Runtime image, user, `/data` volume, TLS certificates, binary optimization flags and
+healthcheck remain unchanged. This improves the build phase only, not Dokploy's image
+pull, healthcheck wait or seamless container replacement. The Dockerfile requires
+BuildKit (`RUN --mount`); legacy builders are not supported.

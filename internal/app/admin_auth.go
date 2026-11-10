@@ -25,8 +25,9 @@ type adminAccount struct {
 type adminAccountContextKey struct{}
 
 type adminSession struct {
-	Account adminAccount
-	Expires time.Time
+	PasswordVersion string
+	Account         adminAccount
+	Expires         time.Time
 }
 
 func parseAdminAccounts(raw, legacyToken string) ([]adminAccount, error) {
@@ -49,43 +50,99 @@ func parseAdminAccounts(raw, legacyToken string) ([]adminAccount, error) {
 	return accounts, nil
 }
 
+func (server *proxyServer) accountForSession(session adminSession) *adminAccount {
+	if !time.Now().Before(session.Expires) {
+		return nil
+	}
+	for i := range server.cfg.AdminAccounts {
+		account := &server.cfg.AdminAccounts[i]
+		if session.Account.Name != account.Name || adminFingerprint(&session.Account) != adminFingerprint(account) {
+			continue
+		}
+		password, _ := server.keys.adminPassword(account)
+		if session.PasswordVersion != password.Hash {
+			return nil
+		}
+		return account
+	}
+	return nil
+}
+
 func (server *proxyServer) authenticateAdmin(r *http.Request) (*adminAccount, error) {
 	if sessionID := r.Header.Get("X-Admin-Session"); sessionID != "" {
 		if session, ok := server.infra.loadAdminSession(r.Context(), sessionID); ok {
-			account := session.Account
-			return &account, nil
+			if account := server.accountForSession(session); account != nil {
+				return account, nil
+			}
 		}
 		server.adminMu.Lock()
 		session, ok := server.adminSessions[sessionID]
-		if ok && time.Now().Before(session.Expires) {
-			account := session.Account
-			server.adminMu.Unlock()
-			return &account, nil
-		}
-		delete(server.adminSessions, sessionID)
 		server.adminMu.Unlock()
-	}
-	provided := r.Header.Get("X-Admin-Token")
-	for i := range server.cfg.AdminAccounts {
-		account := &server.cfg.AdminAccounts[i]
-		if len(provided) != len(account.Token) || subtle.ConstantTimeCompare([]byte(provided), []byte(account.Token)) != 1 {
-			continue
+		if ok {
+			if account := server.accountForSession(session); account != nil {
+				return account, nil
+			}
 		}
-		if account.TOTPSecret != "" && !validTOTP(account.TOTPSecret, r.Header.Get("X-Admin-TOTP"), time.Now()) {
-			return nil, errors.New("invalid TOTP code")
-		}
-		return account, nil
 	}
-	return nil, errors.New("invalid administrator token")
+	if cookie, err := r.Cookie(adminSessionCookie); err == nil {
+		if account := server.keys.browserSessionAccount(cookie.Value, server.cfg.AdminAccounts); account != nil {
+			if !cookieMutationAllowed(r) {
+				return nil, errAdminCSRF
+			}
+			return account, nil
+		}
+	}
+	return server.authenticateAdminCredentials("", "", r.Header.Get("X-Admin-Token"), r.Header.Get("X-Admin-TOTP"))
+}
+
+func (server *proxyServer) authenticateAdminCredentials(name, password, token, totp string) (*adminAccount, error) {
+	var matched *adminAccount
+	if token != "" {
+		for i := range server.cfg.AdminAccounts {
+			account := &server.cfg.AdminAccounts[i]
+			if len(token) == len(account.Token) && subtle.ConstantTimeCompare([]byte(token), []byte(account.Token)) == 1 {
+				matched = account
+			}
+		}
+	} else if name != "" && password != "" {
+		record, ok := savedAdminPassword{}, false
+		for i := range server.cfg.AdminAccounts {
+			if server.cfg.AdminAccounts[i].Name != name {
+				continue
+			}
+			if candidate, exists := server.keys.adminPassword(&server.cfg.AdminAccounts[i]); exists {
+				record, ok = candidate, true
+				matched = &server.cfg.AdminAccounts[i]
+				break
+			}
+		}
+		// Unknown accounts perform the same KDF without revealing account existence.
+		if !ok {
+			record = savedAdminPassword{Salt: "AAAAAAAAAAAAAAAAAAAAAA", Hash: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
+		}
+		if !passwordMatches(password, record) || !ok {
+			matched = nil
+		}
+	}
+
+	if matched == nil {
+		return nil, errors.New("invalid administrator credentials")
+	}
+	if matched.TOTPSecret != "" && !validTOTP(matched.TOTPSecret, totp, time.Now()) {
+		return nil, errors.New("invalid administrator credentials or TOTP code")
+	}
+	return matched, nil
 }
 
 func (server *proxyServer) createAdminSession(account *adminAccount) (string, time.Time) {
 	id := newRequestID() + newRequestID()
 	expires := time.Now().UTC().Add(12 * time.Hour)
+	password, _ := server.keys.adminPassword(account)
+	session := adminSession{Account: *account, Expires: expires, PasswordVersion: password.Hash}
 	server.adminMu.Lock()
-	server.adminSessions[id] = adminSession{Account: *account, Expires: expires}
+	server.adminSessions[id] = session
 	server.adminMu.Unlock()
-	server.infra.saveAdminSession(context.Background(), id, adminSession{Account: *account, Expires: expires})
+	server.infra.saveAdminSession(context.Background(), id, session)
 	return id, expires
 }
 

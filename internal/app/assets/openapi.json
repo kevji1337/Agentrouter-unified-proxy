@@ -20,6 +20,12 @@
         "type": "apiKey",
         "in": "header",
         "name": "X-Admin-Session"
+      },
+      "adminCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "arp_admin_session",
+        "description": "HttpOnly browser session. Cookie mutations require X-Admin-CSRF: 1 and same origin."
       }
     },
     "schemas": {
@@ -441,6 +447,9 @@
         "security": [
           {
             "adminSession": []
+          },
+          {
+            "adminCookie": []
           }
         ],
         "summary": "List masked upstream credentials",
@@ -469,6 +478,9 @@
         "security": [
           {
             "adminSession": []
+          },
+          {
+            "adminCookie": []
           }
         ],
         "summary": "Create encrypted upstream credential (admin role)",
@@ -545,6 +557,9 @@
         "security": [
           {
             "adminSession": []
+          },
+          {
+            "adminCookie": []
           }
         ],
         "summary": "Replace upstream routing policy (admin role)",
@@ -591,6 +606,9 @@
         "security": [
           {
             "adminSession": []
+          },
+          {
+            "adminCookie": []
           }
         ],
         "summary": "Probe optional models endpoint (admin role)",
@@ -639,6 +657,9 @@
         "security": [
           {
             "adminSession": []
+          },
+          {
+            "adminCookie": []
           }
         ],
         "summary": "List safe network proxy views",
@@ -667,6 +688,9 @@
         "security": [
           {
             "adminSession": []
+          },
+          {
+            "adminCookie": []
           }
         ],
         "summary": "Add encrypted network proxy and rebalance automatic keys",
@@ -713,6 +737,9 @@
         "security": [
           {
             "adminSession": []
+          },
+          {
+            "adminCookie": []
           }
         ],
         "summary": "Edit proxy and rebalance without interrupting requests",
@@ -742,6 +769,9 @@
         "security": [
           {
             "adminSession": []
+          },
+          {
+            "adminCookie": []
           }
         ],
         "summary": "Delete proxy; manual pins must be reassigned first",
@@ -778,6 +808,9 @@
         "security": [
           {
             "adminSession": []
+          },
+          {
+            "adminCookie": []
           }
         ],
         "summary": "Probe HTTP(S) target through proxy without API credentials",
@@ -817,6 +850,9 @@
         "security": [
           {
             "adminSession": []
+          },
+          {
+            "adminCookie": []
           }
         ],
         "summary": "List providers and their explicit model catalogs",
@@ -845,6 +881,9 @@
         "security": [
           {
             "adminSession": []
+          },
+          {
+            "adminCookie": []
           }
         ],
         "summary": "Create model-routing provider (admin role)",
@@ -891,6 +930,9 @@
         "security": [
           {
             "adminSession": []
+          },
+          {
+            "adminCookie": []
           }
         ],
         "summary": "Update shared provider settings for future key selections",
@@ -920,6 +962,9 @@
         "security": [
           {
             "adminSession": []
+          },
+          {
+            "adminCookie": []
           }
         ],
         "summary": "Delete provider with no linked keys",
@@ -946,6 +991,9 @@
         "security": [
           {
             "adminSession": []
+          },
+          {
+            "adminCookie": []
           }
         ],
         "summary": "Recent readable gateway events with process-aware cursor",
@@ -1054,6 +1102,9 @@
         "security": [
           {
             "adminSession": []
+          },
+          {
+            "adminCookie": []
           }
         ],
         "summary": "Edit name/enabled and optionally replace encrypted API credential",
@@ -1098,6 +1149,163 @@
           },
           "403": {
             "description": "Admin role required"
+          }
+        }
+      }
+    },
+    "/api/admin/login": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "post": {
+        "security": [],
+        "summary": "Password/token login with optional remembered browser session",
+        "description": "browser=true requires X-Admin-CSRF: 1; sets HttpOnly cookie without returning bearer. Legacy clients receive session for X-Admin-Session. TOTP required when configured.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "password": {
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "totp": {
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "new_password": {
+                    "type": "string",
+                    "writeOnly": true,
+                    "description": "Optional initial password bootstrap; existing password must be changed through /password."
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "browser": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "remember": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Account and expiry; browser Set-Cookie or legacy session"
+          },
+          "401": {
+            "description": "Invalid credentials/TOTP"
+          },
+          "429": {
+            "description": "Too many login attempts"
+          },
+          "503": {
+            "description": "Persistent store unavailable for browser session"
+          }
+        }
+      }
+    },
+    "/api/admin/password": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "post": {
+        "security": [
+          {
+            "adminSession": []
+          },
+          {
+            "adminCookie": []
+          }
+        ],
+        "summary": "Set/change own password after reauthentication",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "password"
+                ],
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "writeOnly": true,
+                    "minLength": 12,
+                    "maxLength": 1024
+                  },
+                  "current_password": {
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "token": {
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "totp": {
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password saved, other sessions revoked, new cookie issued"
+          },
+          "401": {
+            "description": "Reauthentication required"
+          },
+          "403": {
+            "description": "Same-origin CSRF validation required"
+          },
+          "400": {
+            "description": "Invalid password"
+          }
+        }
+      }
+    },
+    "/api/admin/logout": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "post": {
+        "security": [
+          {
+            "adminSession": []
+          },
+          {
+            "adminCookie": []
+          }
+        ],
+        "summary": "Revoke current browser/header session",
+        "responses": {
+          "204": {
+            "description": "Session revoked and cookie expired"
+          },
+          "403": {
+            "description": "Same-origin CSRF validation required"
           }
         }
       }

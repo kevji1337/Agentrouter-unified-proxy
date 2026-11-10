@@ -439,6 +439,7 @@ type proxyServer struct {
 	lastKeyHealth atomic.Value
 	adminMu       sync.Mutex
 	adminSessions map[string]adminSession
+	loginAttempts map[string]loginAttemptWindow
 	infra         *infrastructure
 }
 
@@ -1378,7 +1379,7 @@ func Run() {
 		state, stateErr := infra.loadGatewayState(rootCtx)
 		switch {
 		case stateErr == nil && len(state) > 0:
-			if err := proxy.keys.importBackup(state); err != nil {
+			if err := proxy.keys.importState(state, true); err != nil {
 				logEvent("error", "postgres_state_import_failed", map[string]any{"error": err.Error()})
 				os.Exit(1)
 			}

@@ -238,7 +238,10 @@ docker run -d --name agentrouter-unified-proxy --restart unless-stopped `
   agentrouter-unified-proxy
 ```
 
-Откройте `http://127.0.0.1:8080/admin` и введите `ADMIN_TOKEN`. Панель позволяет:
+Откройте `/admin`. При первом входе выберите «Токен / первый вход», введите
+`ADMIN_TOKEN` и задайте пароль. Дальше — логин `owner` и пароль или сохранённая
+HttpOnly-сессия с «Запомнить меня». На хосте используйте HTTPS.
+Подробнее: [`docs/admin-login.md`](docs/admin-login.md). Панель позволяет:
 
 - добавлять providers с названием, Base URL, API protocol, profile и явными моделями;
 - выбирать готового провайдера, network route и enabled при добавлении credentials;
@@ -260,8 +263,9 @@ docker run -d --name agentrouter-unified-proxy --restart unless-stopped `
 повторного добавления ключей сделает существующий файл нечитаемым.
 
 Multi-admin конфигурация поддерживает роли `admin` и `viewer`, а также
-опциональный Base32 TOTP secret. UI после token+TOTP login использует 12-часовую
-in-memory session; TOTP-код не хранится и не отправляется повторно.
+опциональный Base32 TOTP secret. Вход по паролю и токену сохраняет TOTP-проверку.
+Браузерная HttpOnly-сессия хранится в persistent state: 30 дней с «Запомнить меня»,
+12 часов без него. Выход и смена пароля отзывают сессии; токен остаётся для восстановления.
 
 ### Клиентские API-ключи
 

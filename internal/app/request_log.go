@@ -304,6 +304,8 @@ func logSummary(event string, fields map[string]any) string {
 		return fmt.Sprintf("Проверка ключей: %s проверено · %s принято · %s ошибок · %s не подтверждено", value("checked"), value("accepted"), value("failed"), value("inconclusive"))
 	case "key_health_failed":
 		return fmt.Sprintf("Проверка %s / %s: HTTP %s — %s", value("provider"), value("key_name"), value("status"), value("reason"))
+	case "admin_password_changed":
+		return "Пароль администратора изменён; предыдущие сессии отозваны"
 	case "admin_key_updated":
 		summary := "API-ключ обновлён: " + value("name")
 		if value("credential_replaced") == "true" {
