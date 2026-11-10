@@ -102,8 +102,9 @@ reverse proxy should reach it.
 
 ## 5. First login
 
-Open `/admin` over HTTPS, choose **Токен / первый вход**, enter `ADMIN_TOKEN` and
-optionally set a password. Future logins use `owner` + password or Remember me.
+Open `/admin` over HTTPS and use `owner` + the saved password or Remember me.
+Token login is no longer offered in the UI. Initial password setup/recovery for
+a new installation remains available through the legacy administrative API.
 See [admin-login.md](admin-login.md). Add upstream credentials with their
 Base URL and API protocol. AgentRouter defaults to Responses; custom providers
 can use native Chat Completions and generic profile. See [multi-upstream.md](multi-upstream.md)

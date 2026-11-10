@@ -26,6 +26,30 @@ func adminBrowserRequest(gateway *proxyServer, method, path, body string, cookie
 
 func browserLogin(t *testing.T, gateway *proxyServer, input string) *http.Cookie {
 	t.Helper()
+	var data map[string]any
+	if err := json.Unmarshal([]byte(input), &data); err != nil {
+		t.Fatal(err)
+	}
+	if token, ok := data["token"].(string); ok {
+		password, _ := data["new_password"].(string)
+		if password == "" {
+			password = "browser-fixture-password-long"
+		}
+		bootstrap, _ := json.Marshal(map[string]any{"token": token, "new_password": password, "totp": data["totp"]})
+		rec := adminBrowserRequest(gateway, "POST", "/api/admin/login", string(bootstrap), nil, true)
+		if rec.Code != 200 {
+			t.Fatalf("legacy password bootstrap=%d %s", rec.Code, rec.Body.String())
+		}
+		account, err := gateway.authenticateAdminCredentials("", "", token, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		data["name"], data["password"] = account.Name, password
+		delete(data, "token")
+		delete(data, "new_password")
+		encoded, _ := json.Marshal(data)
+		input = string(encoded)
+	}
 	rec := adminBrowserRequest(gateway, "POST", "/api/admin/login", input, nil, true)
 	if rec.Code != 200 {
 		t.Fatalf("browser login=%d %s", rec.Code, rec.Body.String())
@@ -181,12 +205,12 @@ func TestAdminPasswordTOTPAndLoginRateLimit(t *testing.T) {
 		t.Fatal("password hashing invalid")
 	}
 	for i := 0; i < 10; i++ {
-		rec := adminBrowserRequest(gateway, "POST", "/api/admin/login", `{"token":"wrong","browser":true}`, nil, true)
+		rec := adminBrowserRequest(gateway, "POST", "/api/admin/login", `{"name":"owner","password":"wrong","browser":true}`, nil, true)
 		if rec.Code != 401 {
 			t.Fatalf("attempt %d = %d", i, rec.Code)
 		}
 	}
-	rec := adminBrowserRequest(gateway, "POST", "/api/admin/login", `{"token":"wrong","browser":true}`, nil, true)
+	rec := adminBrowserRequest(gateway, "POST", "/api/admin/login", `{"name":"owner","password":"wrong","browser":true}`, nil, true)
 	if rec.Code != 429 || rec.Header().Get("Retry-After") != "60" {
 		t.Fatal("login not throttled")
 	}
@@ -304,5 +328,21 @@ func TestBrowserSessionRejectsChangedPasswordVersion(t *testing.T) {
 	gateway.keys.mu.Unlock()
 	if gateway.keys.browserSessionAccount(id, []adminAccount{account}) != nil {
 		t.Fatal("stale password-version session accepted")
+	}
+}
+
+func TestBrowserTokenLoginRemovedButLegacyAPIPreserved(t *testing.T) {
+	gateway := multiUpstreamProxy(t, "https://agentrouter.org")
+	gateway.cfg.AdminAccounts = []adminAccount{{Name: "owner", Role: "admin", Token: "password-only-fixture-token"}}
+	rec := adminBrowserRequest(gateway, "POST", "/api/admin/login", `{"token":"password-only-fixture-token","browser":true}`, nil, true)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "password_login_required") || len(rec.Result().Cookies()) != 0 {
+		t.Fatal("browser token login still enabled")
+	}
+	rec = adminBrowserRequest(gateway, "POST", "/api/admin/login", `{"token":"password-only-fixture-token"}`, nil, false)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"session"`) {
+		t.Fatal("legacy token API broken")
+	}
+	if !strings.Contains(adminDashboardHTML, `id="login" class="login hidden"`) {
+		t.Fatal("login form visible before session check")
 	}
 }

@@ -241,6 +241,10 @@ func (server *proxyServer) handleAdminLogin(w http.ResponseWriter, r *http.Reque
 		writeError(w, 403, "admin_csrf_required", "same-origin admin request required")
 		return
 	}
+	if input.Browser && (input.Token != "" || input.NewPassword != "") {
+		writeError(w, http.StatusBadRequest, "password_login_required", "browser login requires name and password")
+		return
+	}
 	account, err := server.authenticateAdminCredentials(input.Name, input.Password, input.Token, input.TOTP)
 	if err != nil {
 		writeError(w, 401, "admin_auth_required", err.Error())

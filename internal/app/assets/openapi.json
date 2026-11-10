@@ -1162,7 +1162,7 @@
       "post": {
         "security": [],
         "summary": "Password/token login with optional remembered browser session",
-        "description": "browser=true requires X-Admin-CSRF: 1; sets HttpOnly cookie without returning bearer. Legacy clients receive session for X-Admin-Session. TOTP required when configured.",
+        "description": "browser=true requires name/password and X-Admin-CSRF: 1; rejects token/new_password. Sets HttpOnly cookie without returning bearer. Legacy non-browser token clients receive X-Admin-Session. TOTP required when configured.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1172,7 +1172,8 @@
                 "properties": {
                   "token": {
                     "type": "string",
-                    "writeOnly": true
+                    "writeOnly": true,
+                    "description": "Legacy non-browser API authentication/recovery only; rejected with browser=true."
                   },
                   "password": {
                     "type": "string",
@@ -1185,7 +1186,7 @@
                   "new_password": {
                     "type": "string",
                     "writeOnly": true,
-                    "description": "Optional initial password bootstrap; existing password must be changed through /password."
+                    "description": "Legacy non-browser initial password bootstrap only; requires CSRF header. Browser UI is password-only."
                   },
                   "name": {
                     "type": "string"

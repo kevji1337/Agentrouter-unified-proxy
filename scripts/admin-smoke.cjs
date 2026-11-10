@@ -18,7 +18,8 @@ const chrome = process.env.CHROME_BIN || [
 if (!chrome) throw Error('Chrome/Chromium is required (set CHROME_BIN)');
 
 const fixture = String.raw`
-sessionStorage.setItem('ar_admin_session', 'fixture');
+sessionStorage.removeItem('ar_admin_session');
+let releaseSessionCheck;const initialSessionCheck=new Promise(resolve=>{releaseSessionCheck=resolve});let checkingFirstSession=true;
 const requests = [];
 let browserAuthenticated=true;
 const providers = [
@@ -41,6 +42,7 @@ window.prompt = () => 'https://probe.example';
 window.addEventListener('error', e => document.body.dataset.smokeError = e.message);
 window.fetch = async (url, options = {}) => {
  requests.push([url, options]);
+ if(url==='/api/admin/status'&&checkingFirstSession){checkingFirstSession=false;await initialSessionCheck;}
  const status = {upstream:'https://agentrouter.org', admin:{name:'owner',role:'admin',password_set:true}, store:{ready:true, available:25, total:25}, selection_mode:'pool-only', network_proxy_pool:true};
  let data = {};
  if(url==='/api/admin/logout'){browserAuthenticated=false;return {ok:true,status:204,json:async()=>({})};}
@@ -61,6 +63,11 @@ async function smoke() {
  const assert = (value, message) => { if (!value) throw Error(message); };
  try {
   await pause();
+  assert(document.getElementById('login').classList.contains('hidden'),'no login flash during delayed session check');
+  assert(!document.getElementById('sessionLoading').hidden&&document.getElementById('adminDashboard').hidden,'checking session screen');
+  releaseSessionCheck();await pause();
+  assert(document.getElementById('login').classList.contains('hidden')&&document.getElementById('sessionLoading').hidden,'authenticated without login flash');
+  assert(!document.getElementById('tokenTab')&&!document.getElementById('adminToken'),'token login removed');
   document.querySelector('[data-page="providers"]').click(); await pause();
   assert(document.querySelectorAll('#providerContent article').length === 2, 'provider cards');
   assert(document.querySelectorAll('.model-chip').length === 4, 'model chips');
@@ -159,11 +166,6 @@ async function smoke() {
   assert(requests.some(([p])=>p==='/api/admin/password'),'password settings submission');
   const mutation=requests.filter(([p])=>p==='/api/admin/password').at(-1);
   assert(mutation[1].headers['X-Admin-CSRF']==='1' && !mutation[1].headers['X-Admin-Session'],'cookie mutation CSRF, no JS bearer');
-  document.getElementById('lockBtn').click();await pause();document.getElementById('tokenTab').click();
-  assert(document.getElementById('adminPassword').disabled && !document.getElementById('adminToken').disabled,'token tab disables hidden password');
-  document.getElementById('adminToken').value='fixture-admin-token';document.getElementById('initialPassword').value='bootstrap-fixture-password-long';document.getElementById('loginForm').dispatchEvent(new Event('submit',{cancelable:true}));await pause();
-  assert(JSON.parse(requests.filter(([p])=>p==='/api/admin/login').at(-1)[1].body).new_password==='bootstrap-fixture-password-long','first-login password setup');
-  assert(document.getElementById('adminToken').value==='','token cleared');
   document.querySelector('[data-page="overview"]').click();await pause();document.getElementById('modeButton').click();
   assert(document.getElementById('modeButton').getAttribute('aria-expanded')==='true','dropdown arrow state');
   assert(getComputedStyle(document.querySelector('#modeButton .chevron')).borderRadius==='7px','styled dropdown arrow');

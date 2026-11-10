@@ -1,25 +1,29 @@
 # Admin login
 
-## First login and password setup
+## Password-only panel
 
-1. Open `/admin` over HTTPS.
-2. Select **Токен / первый вход** and enter your existing `ADMIN_TOKEN` (or a token
-   from `ADMIN_ACCOUNTS_JSON`). Supply TOTP if enabled.
-3. Optionally enter a new password, at least 12 bytes. This sets the password for
-   the authenticated account without changing ADMIN_TOKEN or KEY_STORE_SECRET.
-4. Leave **Запомнить меня на 30 дней** enabled on a trusted personal device.
-5. Afterwards use **Логин и пароль**. The legacy ADMIN_TOKEN account's login is
-   `owner`; multi-admin accounts use their configured `name`. Fields support
-   browser/password-manager autocomplete. The token remains a recovery method.
+Open `/admin` over HTTPS and enter your configured account name and password.
+The legacy ADMIN_TOKEN account name is `owner`; multi-admin accounts use their
+configured `name`. Password fields support browser/password-manager autocomplete.
+Leave **Запомнить меня на 30 дней** enabled only on a trusted personal device.
+TOTP is still required if configured.
 
-You can set/change a password later with **Пароль и доступ** in the top bar.
-Changing it requires the current password or token and the current TOTP if enabled.
-Password confirmation happens in the form. A failed confirmation does not log you
-out. The recovery token is still a valid powerful credential: store it safely,
-and don't discard KEY_STORE_SECRET, especially if it defaults to ADMIN_TOKEN.
+The panel no longer offers token login or token-based password confirmation.
+Change your password with **Сменить пароль**, confirming the current password and
+TOTP. Existing saved passwords and remembered cookies are unchanged by this update.
+Password login does not replace gateway client `arp_` API keys.
 
-Password login does not replace gateway client `arp_` API keys. These credentials,
-provider settings and proxy authentication remain separate.
+For a new installation or forgotten password, the legacy administrative API still
+supports authenticated token recovery/bootstrap. `POST /api/admin/login` with
+`{token,totp,new_password}` and `X-Admin-CSRF: 1` can initially set a password when
+none exists and returns a legacy header session, not a browser cookie. Use that
+session with `POST /api/admin/password` and fresh token/TOTP confirmation to reset
+an existing password. Do not place real secrets in a committed file or URL.
+
+Keep ADMIN_TOKEN and KEY_STORE_SECRET: token access remains API-compatible and
+KEY_STORE_SECRET may default to ADMIN_TOKEN. Removing/changing it can make saved
+credentials unreadable. Token authentication is not a public browser-login option;
+requests with `browser:true` require name/password and reject token/new_password.
 
 ## Browser session
 
@@ -39,8 +43,11 @@ plain-HTTP remote host will not persist/send the Secure session cookie.
   current browser receives a new session.
 - Changing configured name/token/role/TOTP invalidates matching remembered sessions
   and saved password bindings; re-bootstrap with the current configured token.
-- Invalid/expired sessions show the login form; a transient server error does not
-  intentionally wipe a valid browser session.
+- On reload, a neutral **Проверяем сессию…** screen is shown while status is fetched.
+  The password form is hidden in the initial HTML; it appears only on a missing or
+  expired session (401), so a remembered login does not flash the form.
+- If the initial session check fails because of the network/server, the checking
+  screen offers Retry; it does not show a misleading login form or clear the cookie.
 
 Cookies authenticate only the administrative API, not `/v1` requests. Cookie-based
 mutations require `X-Admin-CSRF: 1` and reject explicit foreign Origin headers.
@@ -81,9 +88,9 @@ edge rate limits as well; forwarded client-IP headers are not trusted automatica
 
 `POST /api/admin/login` supports the original `{token,totp}` and still returns the
 legacy 12-hour `session` for header-based clients. New browser requests send
-`{browser:true,remember:true,name,password,totp}` or `{browser:true,token,totp}`,
-with `X-Admin-CSRF: 1`. Initial token login may include `new_password` to bootstrap
-an account without a saved password. Browser replies set the cookie and return
+`{browser:true,remember:true,name,password,totp}`, with `X-Admin-CSRF: 1`.
+Browser token login is rejected. Legacy non-browser token login may include
+`new_password` with the CSRF header to bootstrap an account without a saved password. Browser replies set the cookie and return
 expiry/account/password_set, never the session bearer.
 
 `POST /api/admin/password`: `{password,current_password?,token?,totp?}` changes only
