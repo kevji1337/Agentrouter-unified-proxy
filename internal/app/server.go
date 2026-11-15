@@ -53,6 +53,11 @@ type config struct {
 	KeyFailover            bool
 	KeyCooldown            time.Duration
 	KeyHealthInterval      time.Duration
+	KeyRecoveryInterval    time.Duration
+	ResponseCache          bool
+	ResponseCacheTTL       time.Duration
+	ResponseCacheMaxItems  int
+	ResponseCacheAll       bool
 	DatabaseURL            string
 	RedisURL               string
 	StorageBackend         string
@@ -155,6 +160,26 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	keyRecoveryInterval, err := envDuration("KEY_RECOVERY_INTERVAL", time.Minute)
+	if err != nil {
+		return config{}, err
+	}
+	responseCache, err := strconv.ParseBool(envDefault("RESPONSE_CACHE", "true"))
+	if err != nil {
+		return config{}, fmt.Errorf("RESPONSE_CACHE must be true or false")
+	}
+	responseCacheTTL, err := envDuration("RESPONSE_CACHE_TTL", time.Hour)
+	if err != nil {
+		return config{}, err
+	}
+	responseCacheMaxItems, err := strconv.Atoi(envDefault("RESPONSE_CACHE_MAX_ENTRIES", "10000"))
+	if err != nil || responseCacheMaxItems <= 0 {
+		responseCacheMaxItems = 10000
+	}
+	responseCacheAll, err := strconv.ParseBool(envDefault("RESPONSE_CACHE_ALL", "false"))
+	if err != nil {
+		return config{}, fmt.Errorf("RESPONSE_CACHE_ALL must be true or false")
+	}
 	alertCooldown, err := envDuration("ALERT_COOLDOWN", 5*time.Minute)
 	if err != nil {
 		return config{}, err
@@ -184,6 +209,11 @@ func loadConfig() (config, error) {
 		KeyStoreSecret: keyStoreSecret, KeySelectionMode: keySelectionMode, KeyFailover: keyFailover,
 		KeyCooldown:       keyCooldown,
 		KeyHealthInterval: keyHealthInterval,
+		KeyRecoveryInterval: keyRecoveryInterval,
+		ResponseCache:       responseCache,
+		ResponseCacheTTL:    responseCacheTTL,
+		ResponseCacheMaxItems: responseCacheMaxItems,
+		ResponseCacheAll:    responseCacheAll,
 		DatabaseURL:       strings.TrimSpace(os.Getenv("DATABASE_URL")), RedisURL: strings.TrimSpace(os.Getenv("REDIS_URL")),
 		StorageBackend: storageBackend, TelegramBotToken: strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
 		TelegramChatID: strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")), AlertCooldown: alertCooldown,
@@ -445,6 +475,7 @@ type proxyServer struct {
 	adminSessions map[string]adminSession
 	loginAttempts map[string]loginAttemptWindow
 	infra         *infrastructure
+	cache         *responseCache
 }
 
 func newProxyServer(cfg config) *proxyServer {
@@ -486,6 +517,22 @@ func newProxyServer(cfg config) *proxyServer {
 		server.routingMode.Store(savedMode)
 	}
 	server.lastKeyHealth.Store(time.Time{})
+	cacheTTL := cfg.ResponseCacheTTL
+	if cacheTTL <= 0 {
+		cacheTTL = time.Hour
+	}
+	cacheMaxItems := cfg.ResponseCacheMaxItems
+	if cacheMaxItems <= 0 {
+		cacheMaxItems = 10000
+	}
+	if cfg.KeyRecoveryInterval <= 0 {
+		cfg.KeyRecoveryInterval = time.Minute
+	}
+	cacheEnabled := cfg.ResponseCache
+	if os.Getenv("RESPONSE_CACHE") == "" && !cacheEnabled {
+		cacheEnabled = true
+	}
+	server.cache = newResponseCache(cacheEnabled, cacheTTL, cacheMaxItems, cfg.ResponseCacheAll)
 	return server
 }
 
@@ -501,28 +548,82 @@ func (server *proxyServer) keyHealthLoop(ctx context.Context) {
 	if server.cfg.KeyHealthInterval <= 0 {
 		return
 	}
-	ticker := time.NewTicker(server.cfg.KeyHealthInterval)
-	defer ticker.Stop()
+	// Initial health probe shortly after startup
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+			server.probeAllKeys(ctx)
+		}
+	}()
+
+	fullTicker := time.NewTicker(server.cfg.KeyHealthInterval)
+	defer fullTicker.Stop()
+
+	recoveryInterval := server.cfg.KeyRecoveryInterval
+	if recoveryInterval <= 0 {
+		recoveryInterval = time.Minute
+	}
+	recoveryTicker := time.NewTicker(recoveryInterval)
+	defer recoveryTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-fullTicker.C:
 			server.probeAllKeys(ctx)
+		case <-recoveryTicker.C:
+			server.probeCoolingKeys(ctx)
 		}
 	}
 }
 
+func (server *proxyServer) probeCoolingKeys(ctx context.Context) (checked, recovered int) {
+	keys, err := server.keys.coolingKeysForProbe()
+	if err != nil || len(keys) == 0 {
+		return 0, 0
+	}
+	for _, key := range keys {
+		if ctx.Err() != nil {
+			return checked, recovered
+		}
+		checked++
+		status, message := server.probeAPIKey(ctx, key)
+		if status >= 200 && status < 300 {
+			recovered++
+			server.keys.recordResult(key.ID, status, "", 0)
+			logEvent("info", "key_cooldown_recovered", map[string]any{
+				"key_id": key.ID, "key_name": key.Name, "provider": providerLogName(&key),
+				"status": status,
+			})
+		} else if !probeInconclusive(status) {
+			server.keys.recordResult(key.ID, status, message, server.cfg.KeyCooldown)
+		}
+	}
+	if recovered > 0 {
+		logEvent("info", "cooling_keys_recovery_completed", map[string]any{
+			"checked": checked, "recovered": recovered,
+		})
+	}
+	return checked, recovered
+}
+
 func (server *proxyServer) probeAllKeys(ctx context.Context) {
+	_, _, _, _ = server.probeAllKeysWithStats(ctx)
+}
+
+func (server *proxyServer) probeAllKeysWithStats(ctx context.Context) (checked, accepted, failed, inconclusive int) {
 	keys, err := server.keys.enabledForProbe()
 	if err != nil {
 		logEvent("error", "key_health_load_failed", map[string]any{"error": err.Error()})
-		return
+		return 0, 0, 0, 0
 	}
-	accepted, failed, inconclusive := 0, 0, 0
+	checked = len(keys)
 	for _, key := range keys {
 		if ctx.Err() != nil {
-			return
+			return checked, accepted, failed, inconclusive
 		}
 		status, message := server.probeAPIKey(ctx, key)
 		if probeInconclusive(status) {
@@ -540,6 +641,7 @@ func (server *proxyServer) probeAllKeys(ctx context.Context) {
 	now := time.Now().UTC()
 	server.lastKeyHealth.Store(now)
 	logEvent("info", "key_health_completed", map[string]any{"checked": len(keys), "accepted": accepted, "failed": failed, "inconclusive": inconclusive})
+	return checked, accepted, failed, inconclusive
 }
 
 func validKeySelectionMode(mode string) bool {
@@ -822,6 +924,28 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 		return
 	}
 	stream, _ := obj["stream"].(bool)
+	cacheKey, cacheTTL, cacheable := server.cache.isCacheable(r, body, obj)
+	if cacheable {
+		if cachedBody, hit := server.cache.get(r.Context(), cacheKey); hit {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Cache", "HIT")
+			w.Header().Set("X-Cache-Key", cacheKey[:16])
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(cachedBody)
+			record := requestLogFromContext(r.Context())
+			record.set(map[string]any{
+				"cached":    true,
+				"cache_hit": true,
+				"model":     model,
+			})
+			logRequestEvent(r.Context(), "info", "cache_hit", map[string]any{
+				"request_id": requestIDFromContext(r.Context()),
+				"cache_key":  cacheKey[:16],
+				"model":      model,
+			})
+			return
+		}
+	}
 	resp, convertedMeta, err := server.doUpstreamWithMeta(r.Context(), r.Header, http.MethodPost, "/v1/chat/completions", body, stream)
 	if err != nil {
 		writeUpstreamError(w, err)
@@ -829,7 +953,22 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 	}
 	defer resp.Body.Close()
 	if convertedMeta == nil {
+		if !isEventStream(resp.Header) && cacheable && resp.StatusCode == http.StatusOK {
+			raw, readErr := io.ReadAll(io.LimitReader(resp.Body, server.cfg.MaxBodyBytes+1))
+			if readErr == nil && int64(len(raw)) <= server.cfg.MaxBodyBytes {
+				server.cache.set(r.Context(), cacheKey, raw, cacheTTL)
+				copyResponseHeaders(w.Header(), resp.Header)
+				w.Header().Set("X-Cache", "MISS")
+				w.Header().Set("X-Cache-Key", cacheKey[:16])
+				w.WriteHeader(resp.StatusCode)
+				_, _ = w.Write(raw)
+				return
+			}
+		}
 		copyResponseHeaders(w.Header(), resp.Header)
+		if cacheable {
+			w.Header().Set("X-Cache", "MISS")
+		}
 		w.WriteHeader(resp.StatusCode)
 		if isEventStream(resp.Header) {
 			server.metrics.activeSSE.Add(1)
@@ -894,6 +1033,11 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "conversion_error", "failed to convert upstream response")
 		return
+	}
+	if cacheable {
+		server.cache.set(r.Context(), cacheKey, chat, cacheTTL)
+		w.Header().Set("X-Cache", "MISS")
+		w.Header().Set("X-Cache-Key", cacheKey[:16])
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -1388,6 +1532,9 @@ func Run() {
 	defer infra.Close()
 	proxy := newProxyServer(cfg)
 	proxy.infra = infra
+	if infra != nil && infra.redis != nil {
+		proxy.cache.setRedis(infra.redis)
+	}
 	if proxy.keys.loadErr != nil {
 		logEvent("error", "key_store_load_error", map[string]any{"error": proxy.keys.loadErr.Error()})
 		os.Exit(1)

@@ -124,6 +124,10 @@ func (server *proxyServer) handleAdminAPI(w http.ResponseWriter, r *http.Request
 		} else {
 			writeError(w, 404, "not_found", "network proxy endpoint not found")
 		}
+	case r.URL.Path == "/api/admin/keys/probe":
+		server.handleAdminKeysProbe(w, r)
+	case r.URL.Path == "/api/admin/cache":
+		server.handleAdminCache(w, r)
 	case r.URL.Path == "/api/admin/keys":
 		server.handleAdminKeys(w, r)
 	case r.URL.Path == "/api/admin/client-keys":
@@ -299,6 +303,8 @@ func (server *proxyServer) handleAdminStatus(w http.ResponseWriter, r *http.Requ
 		"selection_mode": server.currentKeySelectionMode(), "key_failover": server.cfg.KeyFailover,
 		"key_cooldown":        server.cfg.KeyCooldown.String(),
 		"key_health_interval": server.cfg.KeyHealthInterval.String(), "last_key_health_at": optionalTime(lastKeyHealth),
+		"key_recovery_interval": server.cfg.KeyRecoveryInterval.String(),
+		"response_cache":        server.cache.stats(),
 		"store": server.keys.status(), "force_sequential_tools": server.cfg.ForceSequentialTools,
 		"stateless_responses": server.cfg.StatelessResponses,
 		"infrastructure":      server.infra.health(),
@@ -498,6 +504,35 @@ func (server *proxyServer) handleAdminKeyTest(w http.ResponseWriter, r *http.Req
 		"duration_ms": time.Since(started).Milliseconds(), "message": message,
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (server *proxyServer) handleAdminKeysProbe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use POST")
+		return
+	}
+	started := time.Now()
+	checked, accepted, failed, inconclusive := server.probeAllKeysWithStats(r.Context())
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":           true,
+		"checked":      checked,
+		"accepted":     accepted,
+		"failed":       failed,
+		"inconclusive": inconclusive,
+		"duration_ms":  time.Since(started).Milliseconds(),
+	})
+}
+
+func (server *proxyServer) handleAdminCache(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, server.cache.stats())
+	case http.MethodDelete:
+		server.cache.clear(r.Context())
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "cache cleared"})
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET or DELETE")
+	}
 }
 
 func (server *proxyServer) validateAdminPolicy(policy apiKeyPolicy) error {

@@ -794,6 +794,35 @@ func (store *apiKeyStore) enabledForProbe() ([]selectedAPIKey, error) {
 	return result, nil
 }
 
+func (store *apiKeyStore) coolingKeysForProbe() ([]selectedAPIKey, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.loadErr != nil {
+		return nil, store.loadErr
+	}
+	result := make([]selectedAPIKey, 0)
+	now := time.Now().UTC()
+	for _, record := range store.keys {
+		_, providerEnabled := store.providerForKeyLocked(record)
+		if !record.Enabled || !providerEnabled || !store.proxyAvailableLocked(record) {
+			continue
+		}
+		if record.CooldownUntil.IsZero() || !now.Before(record.CooldownUntil) {
+			continue
+		}
+		plain, err := store.decrypt(record)
+		if err != nil {
+			return nil, err
+		}
+		selected, err := store.selectedKeyLocked(record, plain)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *selected)
+	}
+	return result, nil
+}
+
 func (store *apiKeyStore) exportBackup() ([]byte, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
