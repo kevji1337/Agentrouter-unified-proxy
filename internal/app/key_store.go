@@ -1103,6 +1103,9 @@ func normalizeKeyPolicy(record *persistedAPIKey) {
 	if record.Weight > 100 {
 		record.Weight = 100
 	}
+	if effectiveProtocol(record.APIProtocol) == protocolGenAI && record.BaseURL == "" && record.ProviderID == "" {
+		record.BaseURL = DefaultGenAIBaseURL
+	}
 	record.Models = normalizeModels(record.Models)
 	resetUsagePeriods(record, time.Now().UTC())
 }
@@ -1112,7 +1115,7 @@ func validateKeyPolicy(record persistedAPIKey) error {
 		return errors.New("invalid network proxy binding")
 	}
 	if !validProtocol(record.APIProtocol) {
-		return errors.New("api_protocol must be responses or chat-completions")
+		return errors.New("api_protocol must be responses, chat-completions, or genai")
 	}
 	if record.Weight < 0 || record.Weight > 100 {
 		return errors.New("weight must be between 1 and 100")

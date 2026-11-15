@@ -512,7 +512,11 @@ func (server *proxyServer) validateAdminPolicy(policy apiKeyPolicy) error {
 		return errors.New("provider not found")
 	}
 	if strings.TrimSpace(raw) == "" {
-		raw = server.cfg.UpstreamURL.String()
+		if effectiveProtocol(policy.APIProtocol) == protocolGenAI {
+			raw = DefaultGenAIBaseURL
+		} else {
+			raw = server.cfg.UpstreamURL.String()
+		}
 	}
 	_, err := server.validateUpstreamURL(raw)
 	return err
@@ -526,7 +530,7 @@ func probeInconclusive(status int) bool {
 func (server *proxyServer) probeAPIKey(ctx context.Context, key selectedAPIKey) (int, string) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	baseURL, profile, _, err := server.upstreamSettings(&key)
+	baseURL, profile, protocol, err := server.upstreamSettings(&key)
 	if err != nil {
 		return http.StatusBadGateway, "invalid or disallowed upstream URL"
 	}
@@ -534,6 +538,9 @@ func (server *proxyServer) probeAPIKey(ctx context.Context, key selectedAPIKey) 
 	route, err := server.outboundRoute(&key)
 	if err != nil {
 		return 0, "assigned network route unavailable"
+	}
+	if protocol == protocolGenAI {
+		return server.probeGenAIKey(ctx, route, baseURL, key)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.upstreamURLFor(baseURL, "/v1/models"), nil)
 	if err != nil {

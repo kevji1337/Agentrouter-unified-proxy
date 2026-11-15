@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -10,6 +11,9 @@ import (
 const (
 	protocolResponses       = "responses"
 	protocolChatCompletions = "chat-completions"
+	protocolGenAI           = "genai"
+
+	DefaultGenAIBaseURL = "https://generativelanguage.googleapis.com"
 )
 
 var errNoCompatibleUpstream = errors.New("no available upstream supports the requested API protocol and model")
@@ -24,7 +28,8 @@ func effectiveProtocol(protocol string) string {
 }
 
 func validProtocol(protocol string) bool {
-	return effectiveProtocol(protocol) == protocolResponses || protocol == protocolChatCompletions
+	p := effectiveProtocol(protocol)
+	return p == protocolResponses || p == protocolChatCompletions || p == protocolGenAI
 }
 
 func parseUpstreamURL(raw string) (*url.URL, error) {
@@ -40,6 +45,18 @@ func parseUpstreamURL(raw string) (*url.URL, error) {
 		if err != nil || value < 1 || value > 65535 {
 			return nil, errors.New("base_url port must be between 1 and 65535")
 		}
+	}
+	hostname := strings.ToLower(parsed.Hostname())
+	if hostname == "metadata.google.internal" || hostname == "instance-data" || hostname == "metadata" || (strings.HasSuffix(hostname, ".internal") && strings.Contains(hostname, "metadata")) {
+		return nil, errors.New("base_url must not target cloud metadata endpoints")
+	}
+	if ip := net.ParseIP(hostname); ip != nil {
+		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return nil, errors.New("base_url must not target link-local or metadata addresses")
+		}
+	}
+	if _, err := strconv.ParseUint(hostname, 10, 64); err == nil {
+		return nil, errors.New("base_url must not use integer IP representations")
 	}
 	// Do not clean or discard provider-specific path segments.
 	parsed.Path = strings.TrimRight(parsed.Path, "/")
@@ -74,13 +91,20 @@ func (server *proxyServer) validateUpstreamURL(raw string) (*url.URL, error) {
 }
 
 func (server *proxyServer) upstreamSettings(key *selectedAPIKey) (*url.URL, string, string, error) {
-	raw := server.cfg.UpstreamURL.String()
 	protocol := effectiveProtocol(server.cfg.UpstreamProtocol)
-	profile := server.cfg.Profile
 	if key != nil {
 		protocol = effectiveProtocol(key.APIProtocol)
+	}
+	raw := server.cfg.UpstreamURL.String()
+	if protocol == protocolGenAI && (server.cfg.UpstreamURL == nil || server.cfg.UpstreamProtocol != protocolGenAI) {
+		raw = DefaultGenAIBaseURL
+	}
+	profile := server.cfg.Profile
+	if key != nil {
 		if key.BaseURL != "" {
 			raw = key.BaseURL
+		} else if protocol == protocolGenAI {
+			raw = DefaultGenAIBaseURL
 		}
 	}
 	if !validProtocol(protocol) {
@@ -106,6 +130,12 @@ func (server *proxyServer) usesWAFCookies(base *url.URL, profile string) bool {
 // Prepare from the original client payload on EVERY attempt, so failover may
 // change protocols without reusing a payload converted for another upstream.
 func (server *proxyServer) prepareUpstream(path string, body []byte, protocol string) (string, []byte, *requestMeta, error) {
+	if protocol == protocolGenAI {
+		if path != "/v1/chat/completions" && path != "/v1/models" && path != "/models" {
+			return "", nil, nil, errNoCompatibleUpstream
+		}
+		return path, body, nil, nil
+	}
 	if path == "/v1/responses" && protocol != protocolResponses {
 		return "", nil, nil, errNoCompatibleUpstream
 	}

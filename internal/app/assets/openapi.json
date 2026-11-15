@@ -36,7 +36,8 @@
             "type": "string",
             "enum": [
               "responses",
-              "chat-completions"
+              "chat-completions",
+              "genai"
             ],
             "description": "Create default: responses. Omitted on policy update: preserve current protocol."
           },
@@ -130,7 +131,8 @@
             "type": "string",
             "enum": [
               "responses",
-              "chat-completions"
+              "chat-completions",
+              "genai"
             ]
           },
           "spoof_profile": {
@@ -252,7 +254,8 @@
             "type": "string",
             "enum": [
               "responses",
-              "chat-completions"
+              "chat-completions",
+              "genai"
             ],
             "default": "responses"
           },
@@ -316,7 +319,7 @@
   "paths": {
     "/chat/completions": {
       "post": {
-        "summary": "Native Chat Completions or Responses adapter, according to selected upstream api_protocol",
+        "summary": "Native Chat Completions, Responses adapter, or Google GenAI, according to selected upstream api_protocol",
         "responses": {
           "200": {
             "description": "Completion or SSE stream"

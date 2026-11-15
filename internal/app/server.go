@@ -65,14 +65,18 @@ func loadConfig() (config, error) {
 	if err := loadDotEnv(".env"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return config{}, fmt.Errorf("load .env: %w", err)
 	}
-	rawURL := envDefault("UPSTREAM_URL", "https://agentrouter.org")
+	upstreamProtocol := envDefault("UPSTREAM_API_PROTOCOL", protocolResponses)
+	if !validProtocol(upstreamProtocol) {
+		return config{}, errors.New("UPSTREAM_API_PROTOCOL must be responses, chat-completions, or genai")
+	}
+	defaultUpstreamURL := "https://agentrouter.org"
+	if upstreamProtocol == protocolGenAI {
+		defaultUpstreamURL = DefaultGenAIBaseURL
+	}
+	rawURL := envDefault("UPSTREAM_URL", defaultUpstreamURL)
 	upstream, err := parseUpstreamURL(rawURL)
 	if err != nil {
 		return config{}, fmt.Errorf("UPSTREAM_URL: %w", err)
-	}
-	upstreamProtocol := envDefault("UPSTREAM_API_PROTOCOL", protocolResponses)
-	if !validProtocol(upstreamProtocol) {
-		return config{}, errors.New("UPSTREAM_API_PROTOCOL must be responses or chat-completions")
 	}
 	var allowedOrigins []string
 	if raw := strings.TrimSpace(os.Getenv("UPSTREAM_ALLOWED_ORIGINS")); raw != "" {
@@ -1025,49 +1029,62 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 		if routeErr != nil {
 			return nil, nil, routeErr
 		}
-		var requestBody io.Reader
-		if attemptBody != nil {
-			requestBody = bytes.NewReader(attemptBody)
-		}
 		attemptCtx, cancel := context.WithCancel(ctx)
-		req, err := http.NewRequestWithContext(attemptCtx, method, server.upstreamURLFor(baseURL, attemptPath), requestBody)
-		if err != nil {
-			cancel()
-			return nil, nil, err
-		}
-		req.Header = spoofHeaders(profile)
-		if body != nil {
-			contentType := inbound.Get("Content-Type")
-			if contentType == "" {
-				contentType = "application/json"
+		var resp *http.Response
+		var err error
+		if protocol == protocolGenAI {
+			safePath, _, _ := strings.Cut(attemptPath, "?")
+			record.attempt(map[string]any{"upstream_path": safePath})
+			if attemptPath == "/v1/models" || attemptPath == "/models" {
+				resp, err = server.handleGenAIModels(attemptCtx, route, baseURL, selectedKey)
+			} else {
+				resp, err = server.executeGenAI(attemptCtx, route, baseURL, selectedKey, model, attemptBody, stream)
 			}
-			req.Header.Set("Content-Type", contentType)
-		}
-		if stream {
-			req.Header.Set("Accept", "text/event-stream")
 		} else {
-			accept := inbound.Get("Accept")
-			if accept == "" {
-				accept = "application/json"
+			var requestBody io.Reader
+			if attemptBody != nil {
+				requestBody = bytes.NewReader(attemptBody)
 			}
-			req.Header.Set("Accept", accept)
-		}
-		if authHeader != "" {
-			req.Header.Set("Authorization", authHeader)
-		}
-		if key := inbound.Get("X-Api-Key"); key != "" && selectedKey == nil {
-			req.Header.Set("X-Api-Key", key)
-		}
-		if requestID := requestIDFromContext(ctx); requestID != "" {
-			req.Header.Set("X-Request-ID", requestID)
-		}
-		if cookie := route.cookies.header(); cookie != "" && wafEnabled {
-			req.Header.Set("Cookie", cookie)
-		}
+			var req *http.Request
+			req, err = http.NewRequestWithContext(attemptCtx, method, server.upstreamURLFor(baseURL, attemptPath), requestBody)
+			if err != nil {
+				cancel()
+				return nil, nil, err
+			}
+			req.Header = spoofHeaders(profile)
+			if body != nil {
+				contentType := inbound.Get("Content-Type")
+				if contentType == "" {
+					contentType = "application/json"
+				}
+				req.Header.Set("Content-Type", contentType)
+			}
+			if stream {
+				req.Header.Set("Accept", "text/event-stream")
+			} else {
+				accept := inbound.Get("Accept")
+				if accept == "" {
+					accept = "application/json"
+				}
+				req.Header.Set("Accept", accept)
+			}
+			if authHeader != "" {
+				req.Header.Set("Authorization", authHeader)
+			}
+			if key := inbound.Get("X-Api-Key"); key != "" && selectedKey == nil {
+				req.Header.Set("X-Api-Key", key)
+			}
+			if requestID := requestIDFromContext(ctx); requestID != "" {
+				req.Header.Set("X-Request-ID", requestID)
+			}
+			if cookie := route.cookies.header(); cookie != "" && wafEnabled {
+				req.Header.Set("Cookie", cookie)
+			}
 
-		safePath, _, _ := strings.Cut(attemptPath, "?")
-		record.attempt(map[string]any{"upstream_path": safePath})
-		resp, err := route.client.Do(req)
+			safePath, _, _ := strings.Cut(attemptPath, "?")
+			record.attempt(map[string]any{"upstream_path": safePath})
+			resp, err = route.client.Do(req)
+		}
 		if err != nil {
 			cancel()
 			if selectedKey != nil && selectedKey.NetworkProxy != nil {
@@ -1113,7 +1130,7 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 				logRequestEvent(ctx, "warn", "waf_block_retry", map[string]any{
 					"request_id": requestIDFromContext(ctx), "status": resp.StatusCode,
 				})
-				if route.cookies.warmupWithClient(ctx, server.cfg.UpstreamURL, route.client) {
+				if route.cookies.warmupWithClient(ctx, baseURL, route.client) {
 					server.metrics.wafRefreshes.Add(1)
 				}
 				continue

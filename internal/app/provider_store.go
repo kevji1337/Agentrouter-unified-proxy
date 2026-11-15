@@ -40,6 +40,9 @@ func validateProvider(p apiProvider) error {
 	if strings.TrimSpace(p.Name) == "" || len(p.Name) > 80 {
 		return errors.New("provider name must contain 1 to 80 characters")
 	}
+	if p.BaseURL == "" && effectiveProtocol(p.APIProtocol) == protocolGenAI {
+		p.BaseURL = DefaultGenAIBaseURL
+	}
 	if p.BaseURL == "" {
 		return errors.New("provider base_url is required")
 	}
@@ -101,6 +104,9 @@ func (store *apiKeyStore) saveProvider(id string, input providerInput) (provider
 	record.Name = strings.TrimSpace(input.Name)
 	record.BaseURL = strings.TrimRight(strings.TrimSpace(input.BaseURL), "/")
 	record.APIProtocol = effectiveProtocol(input.APIProtocol)
+	if record.APIProtocol == protocolGenAI && record.BaseURL == "" {
+		record.BaseURL = DefaultGenAIBaseURL
+	}
 	record.SpoofProfile = strings.ToLower(strings.TrimSpace(input.SpoofProfile))
 	record.Models = normalizeModels(input.Models)
 	record.UpdatedAt = now
@@ -255,6 +261,9 @@ func (server *proxyServer) saveAdminProvider(w http.ResponseWriter, r *http.Requ
 	var input providerInput
 	if decodeAdminJSON(w, r, &input) != nil {
 		return
+	}
+	if effectiveProtocol(input.APIProtocol) == protocolGenAI && strings.TrimSpace(input.BaseURL) == "" {
+		input.BaseURL = DefaultGenAIBaseURL
 	}
 	if _, err := server.validateUpstreamURL(input.BaseURL); err != nil {
 		writeAdminStoreError(w, err)
