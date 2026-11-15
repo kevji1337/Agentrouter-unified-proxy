@@ -599,8 +599,9 @@ func (server *proxyServer) routes() http.Handler {
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Api-Key, X-Proxy-Token, X-Request-ID")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Api-Key, X-Proxy-Token, X-Request-ID, X-Admin-CSRF, X-Admin-Session")
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Max-Age", "86400")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -721,7 +722,7 @@ func (server *proxyServer) handleHealth(w http.ResponseWriter, r *http.Request) 
 	}
 	present, names, updated, warmup := server.wafStatus()
 	status := "ok"
-	if !present && server.cfg.Profile != "generic" {
+	if !present && server.cfg.Profile != "generic" && server.cfg.UpstreamProtocol != protocolGenAI {
 		status = "degraded"
 	}
 	payload := map[string]any{

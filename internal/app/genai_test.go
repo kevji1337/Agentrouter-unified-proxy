@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"google.golang.org/genai"
 )
 
 func TestGenAIProtocolRegistrationAndDefaults(t *testing.T) {
@@ -626,4 +628,173 @@ func TestSSRFMetadataProtection(t *testing.T) {
 		}
 	}
 }
+
+func TestGenAIThinkingAndReasoning(t *testing.T) {
+	// 1. Test reasoning_effort mapping
+	cases := []struct {
+		effort         string
+		expectedBudget int32
+		includeThought bool
+	}{
+		{"low", 1024, true},
+		{"medium", 4096, true},
+		{"high", 16384, true},
+		{"none", 0, false},
+	}
+
+	for _, tc := range cases {
+		body := []byte(fmt.Sprintf(`{"model": "gemini-2.5-flash", "messages": [{"role": "user", "content": "hi"}], "reasoning_effort": %q}`, tc.effort))
+		_, _, config, _, err := buildGenAIRequest(body)
+		if err != nil {
+			t.Fatalf("buildGenAIRequest failed for effort %s: %v", tc.effort, err)
+		}
+		if config.ThinkingConfig == nil {
+			t.Fatalf("expected ThinkingConfig to be set for effort %s", tc.effort)
+		}
+		if config.ThinkingConfig.IncludeThoughts != tc.includeThought {
+			t.Errorf("effort %s: expected IncludeThoughts=%v, got %v", tc.effort, tc.includeThought, config.ThinkingConfig.IncludeThoughts)
+		}
+		if config.ThinkingConfig.ThinkingBudget == nil || *config.ThinkingConfig.ThinkingBudget != tc.expectedBudget {
+			t.Errorf("effort %s: expected budget %d, got %v", tc.effort, tc.expectedBudget, config.ThinkingConfig.ThinkingBudget)
+		}
+	}
+
+	// 2. Test thinking.budget_tokens
+	body := []byte(`{"model": "gemini-2.5-flash", "messages": [{"role": "user", "content": "hi"}], "thinking": {"budget_tokens": 2048}}`)
+	_, _, config, _, err := buildGenAIRequest(body)
+	if err != nil {
+		t.Fatalf("buildGenAIRequest failed: %v", err)
+	}
+	if config.ThinkingConfig == nil || config.ThinkingConfig.ThinkingBudget == nil || *config.ThinkingConfig.ThinkingBudget != 2048 {
+		t.Fatalf("expected budget 2048, got %v", config.ThinkingConfig)
+	}
+
+	// 3. Test convertGenAIResponse thought extraction into reasoning_content
+	genResp := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{
+				Content: &genai.Content{
+					Parts: []*genai.Part{
+						{Text: "Thinking through the solution...", Thought: true},
+						{Text: "The final answer is 42.", Thought: false},
+					},
+				},
+				FinishReason: genai.FinishReasonStop,
+			},
+		},
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount:     10,
+			CandidatesTokenCount: 20,
+			TotalTokenCount:      30,
+		},
+	}
+
+	raw, err := convertGenAIResponse(genResp, "gemini-2.5-flash")
+	if err != nil {
+		t.Fatalf("convertGenAIResponse failed: %v", err)
+	}
+
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("failed to unmarshal converted response: %v", err)
+	}
+
+	choices, _ := out["choices"].([]any)
+	if len(choices) != 1 {
+		t.Fatalf("expected 1 choice, got %d", len(choices))
+	}
+	choice0, _ := choices[0].(map[string]any)
+	msg, _ := choice0["message"].(map[string]any)
+
+	if msg["reasoning_content"] != "Thinking through the solution..." {
+		t.Errorf("expected reasoning_content 'Thinking through the solution...', got %v", msg["reasoning_content"])
+	}
+	if msg["content"] != "The final answer is 42." {
+		t.Errorf("expected content 'The final answer is 42.', got %v", msg["content"])
+	}
+}
+
+func TestGenAIMultimodalAudioAndDocument(t *testing.T) {
+	audioB64 := base64.StdEncoding.EncodeToString([]byte("fake-mp3-audio-bytes"))
+	pdfB64 := base64.StdEncoding.EncodeToString([]byte("%PDF-1.4 test pdf"))
+
+	body := []byte(fmt.Sprintf(`{
+		"model": "gemini-2.5-flash",
+		"messages": [
+			{
+				"role": "user",
+				"content": [
+					{"type": "text", "text": "Analyze this:"},
+					{"type": "input_audio", "input_audio": {"data": "%s", "format": "mp3"}},
+					{"type": "file", "file": {"url": "data:application/pdf;base64,%s"}}
+				]
+			}
+		]
+	}`, audioB64, pdfB64))
+
+	_, contents, _, _, err := buildGenAIRequest(body)
+	if err != nil {
+		t.Fatalf("buildGenAIRequest failed: %v", err)
+	}
+
+	if len(contents) != 1 || len(contents[0].Parts) != 3 {
+		t.Fatalf("expected 1 turn with 3 parts, got %d turns, parts: %d", len(contents), len(contents[0].Parts))
+	}
+
+	pAudio := contents[0].Parts[1]
+	if pAudio.InlineData == nil || pAudio.InlineData.MIMEType != "audio/mpeg" {
+		t.Errorf("expected audio/mpeg inline data, got %v", pAudio.InlineData)
+	}
+	if string(pAudio.InlineData.Data) != "fake-mp3-audio-bytes" {
+		t.Errorf("unexpected audio data: %s", string(pAudio.InlineData.Data))
+	}
+
+	pDoc := contents[0].Parts[2]
+	if pDoc.InlineData == nil || pDoc.InlineData.MIMEType != "application/pdf" {
+		t.Errorf("expected application/pdf inline data, got %v", pDoc.InlineData)
+	}
+	if string(pDoc.InlineData.Data) != "%PDF-1.4 test pdf" {
+		t.Errorf("unexpected pdf data: %s", string(pDoc.InlineData.Data))
+	}
+}
+
+func TestHealthAndCORSGenAI(t *testing.T) {
+	// 1. Check health in genai mode returns "ok" even without WAF cookies
+	server := multiUpstreamProxy(t, "https://generativelanguage.googleapis.com")
+	server.cfg.UpstreamProtocol = protocolGenAI
+	server.cfg.Profile = "claude-code" // normally requires WAF cookies, but genai protocol exempts it
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	server.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK from health, got %d", rec.Code)
+	}
+
+	var health map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &health); err != nil {
+		t.Fatalf("failed to decode health response: %v", err)
+	}
+	if health["status"] != "ok" {
+		t.Errorf("expected status 'ok' for genai upstream, got %v", health["status"])
+	}
+
+	// 2. Check CORS headers and Max-Age
+	optReq := httptest.NewRequest(http.MethodOptions, "/v1/chat/completions", nil)
+	optRec := httptest.NewRecorder()
+	server.routes().ServeHTTP(optRec, optReq)
+
+	if optRec.Code != http.StatusNoContent {
+		t.Errorf("expected 204 No Content for OPTIONS, got %d", optRec.Code)
+	}
+	if maxAge := optRec.Header().Get("Access-Control-Max-Age"); maxAge != "86400" {
+		t.Errorf("expected Access-Control-Max-Age: 86400, got %s", maxAge)
+	}
+	allowHeaders := optRec.Header().Get("Access-Control-Allow-Headers")
+	if !strings.Contains(allowHeaders, "X-Admin-CSRF") || !strings.Contains(allowHeaders, "X-Admin-Session") {
+		t.Errorf("expected CORS allow headers to include admin headers, got %s", allowHeaders)
+	}
+}
+
 

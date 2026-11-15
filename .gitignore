@@ -7,3 +7,4 @@ data/
 keys.json
 __pycache__/
 *.pyc
+.admin-smoke/

@@ -300,6 +300,29 @@ func buildGenAIRequest(body []byte) (string, []*genai.Content, *genai.GenerateCo
 		config.Seed = &seed
 	}
 
+	if reasoningEffort, ok := in["reasoning_effort"].(string); ok {
+		switch strings.ToLower(strings.TrimSpace(reasoningEffort)) {
+		case "low":
+			budget := int32(1024)
+			config.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: true, ThinkingBudget: &budget}
+		case "medium":
+			budget := int32(4096)
+			config.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: true, ThinkingBudget: &budget}
+		case "high":
+			budget := int32(16384)
+			config.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: true, ThinkingBudget: &budget}
+		case "none":
+			budget := int32(0)
+			config.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: false, ThinkingBudget: &budget}
+		}
+	} else if thinkingObj, ok := in["thinking"].(map[string]any); ok {
+		if budgetVal, ok := toInt32(thinkingObj["budget_tokens"]); ok {
+			config.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: budgetVal > 0, ThinkingBudget: &budgetVal}
+		}
+	} else if maxThinking, ok := toInt32(in["max_thinking_tokens"]); ok {
+		config.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: maxThinking > 0, ThinkingBudget: &maxThinking}
+	}
+
 	if format, ok := in["response_format"].(map[string]any); ok {
 		typ, _ := format["type"].(string)
 		if typ == "json_object" {
@@ -509,6 +532,38 @@ func convertUserContentToParts(content any) []*genai.Part {
 						})
 					}
 				}
+			case "input_audio":
+				if audioObj, ok := item["input_audio"].(map[string]any); ok {
+					dataStr, _ := audioObj["data"].(string)
+					format, _ := audioObj["format"].(string)
+					if format == "" {
+						format = "wav"
+					}
+					if dataBytes, err := base64.StdEncoding.DecodeString(strings.TrimSpace(dataStr)); err == nil && len(dataBytes) > 0 {
+						mime := "audio/" + format
+						if format == "mp3" {
+							mime = "audio/mpeg"
+						}
+						parts = append(parts, &genai.Part{
+							InlineData: &genai.Blob{
+								MIMEType: mime,
+								Data:     dataBytes,
+							},
+						})
+					}
+				}
+			case "file", "document":
+				if fileObj, ok := item[typ].(map[string]any); ok {
+					urlStr, _ := fileObj["url"].(string)
+					if mime, data, ok := parseDataURI(urlStr); ok {
+						parts = append(parts, &genai.Part{
+							InlineData: &genai.Blob{
+								MIMEType: mime,
+								Data:     data,
+							},
+						})
+					}
+				}
 			}
 		}
 	default:
@@ -618,6 +673,7 @@ func convertGenAIResponse(resp *genai.GenerateContentResponse, fallbackModel str
 	}
 
 	var textBuilder strings.Builder
+	var thoughtBuilder strings.Builder
 	toolCalls := make([]any, 0)
 	finishReason := "stop"
 
@@ -625,7 +681,9 @@ func convertGenAIResponse(resp *genai.GenerateContentResponse, fallbackModel str
 		candidate := resp.Candidates[0]
 		if candidate.Content != nil {
 			for _, part := range candidate.Content.Parts {
-				if part.Text != "" {
+				if part.Thought {
+					thoughtBuilder.WriteString(part.Text)
+				} else if part.Text != "" {
 					textBuilder.WriteString(part.Text)
 				}
 				if part.FunctionCall != nil {
@@ -655,6 +713,9 @@ func convertGenAIResponse(resp *genai.GenerateContentResponse, fallbackModel str
 		message["content"] = nil
 	} else {
 		message["content"] = ""
+	}
+	if thoughtBuilder.Len() > 0 {
+		message["reasoning_content"] = thoughtBuilder.String()
 	}
 	if len(toolCalls) > 0 {
 		message["tool_calls"] = toolCalls
@@ -776,7 +837,22 @@ func streamGenAIResponse(ctx context.Context, client *genai.Client, model string
 				candidate := resp.Candidates[0]
 				if candidate.Content != nil {
 					for _, part := range candidate.Content.Parts {
-						if part.Text != "" {
+						if part.Thought && part.Text != "" {
+							thoughtChunk := map[string]any{
+								"id":      streamID,
+								"object":  "chat.completion.chunk",
+								"created": created,
+								"model":   meta.Model,
+								"choices": []any{
+									map[string]any{
+										"index":         0,
+										"delta":         map[string]any{"reasoning_content": part.Text},
+										"finish_reason": nil,
+									},
+								},
+							}
+							_ = writeStreamSSE(pw, thoughtChunk)
+						} else if part.Text != "" {
 							textChunk := map[string]any{
 								"id":      streamID,
 								"object":  "chat.completion.chunk",
