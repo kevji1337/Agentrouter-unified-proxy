@@ -1,28 +1,30 @@
-FROM golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+ARG TARGETOS=linux
+ARG TARGETARCH
 WORKDIR /src
-ENV CGO_ENABLED=0 GOOS=linux GOCACHE=/root/.cache/go-build
+ENV CGO_ENABLED=0 \
+    GOMODCACHE=/go/pkg/mod \
+    GOCACHE=/go/build-cache
 
-# Cache module downloads and pre-compile heavy dependencies.
-# When code in cmd/ or internal/ changes, this layer is 100% CACHED,
-# dropping build time from ~100s down to ~1-2s.
+# Download modules and pre-compile all external + stdlib dependencies directly
+# into the cached image layer. Unlike ephemeral --mount=type=cache volumes,
+# keeping GOMODCACHE and GOCACHE in this layer guarantees ~1-2s incremental
+# rebuilds across Dokploy, Docker Compose, and registry/GHA layer caches while
+# adding zero bytes to the final runtime stage.
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    go mod download && \
-    printf 'package main\nimport (\n\t_ "github.com/jackc/pgx/v5/stdlib"\n\t_ "github.com/redis/go-redis/v9"\n\t_ "google.golang.org/genai"\n)\nfunc main() {}\n' > /tmp/deps.go && \
-    go build -o /dev/null /tmp/deps.go && \
-    rm /tmp/deps.go
+RUN go mod download && \
+    mkdir -p cmd/_deps && \
+    printf 'package main\nimport (\n\t_ "crypto/pbkdf2"\n\t_ "crypto/x509"\n\t_ "database/sql"\n\t_ "embed"\n\t_ "net/http"\n\t_ "net/netip"\n\t_ "github.com/jackc/pgx/v5/stdlib"\n\t_ "github.com/redis/go-redis/v9"\n\t_ "google.golang.org/genai"\n)\nfunc main() {}\n' > cmd/_deps/main.go && \
+    GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-$(go env GOARCH)}" \
+    go build -mod=readonly -trimpath -ldflags="-s -w -buildid=" -o /dev/null ./cmd/_deps && \
+    rm -rf cmd/_deps
 
 COPY cmd ./cmd
 COPY internal ./internal
-# Fast incremental build reusing cached and pre-compiled dependency objects.
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    go build -mod=readonly -ldflags="-s -w" -o /out/proxy ./cmd/proxy
+RUN GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-$(go env GOARCH)}" \
+    go build -mod=readonly -trimpath -ldflags="-s -w -buildid=" -o /out/proxy ./cmd/proxy
 
 FROM alpine:3.21
-# Copy pre-installed CA certificates from the build stage with zero network calls,
-# avoiding slow APK repository fetches.
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 RUN addgroup -S proxy && adduser -S -G proxy -H -D proxy \
     && mkdir -p /data && chown proxy:proxy /data
@@ -34,6 +36,6 @@ COPY --from=build /out/proxy /app/proxy
 VOLUME ["/data"]
 USER proxy
 EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -q -T 4 -O - http://127.0.0.1:${PORT:-8080}/health >/dev/null || exit 1
+HEALTHCHECK --interval=5s --timeout=3s --start-period=3s --retries=3 \
+  CMD ["/app/proxy", "-healthcheck"]
 ENTRYPOINT ["/app/proxy"]

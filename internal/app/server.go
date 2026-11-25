@@ -1649,7 +1649,54 @@ func writeUpstreamError(w http.ResponseWriter, err error) {
 	writeError(w, http.StatusBadGateway, "upstream_error", "upstream request failed")
 }
 
+func maybeRunHealthcheck(args []string) (int, bool) {
+	if len(args) != 1 {
+		return 0, false
+	}
+	switch args[0] {
+	case "-healthcheck", "--healthcheck", "healthcheck":
+	default:
+		return 0, false
+	}
+	_ = loadDotEnv(".env")
+	port, err := strconv.Atoi(envDefault("PORT", "8080"))
+	if err != nil || port < 1 || port > 65535 {
+		return 1, true
+	}
+	host := strings.TrimSpace(os.Getenv("LISTEN_ADDRESS"))
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		host = "127.0.0.1"
+	default:
+		host = strings.Trim(host, "[]")
+	}
+	target := "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/health"
+	return probeHealthEndpoint(target, 2*time.Second), true
+}
+
+func probeHealthEndpoint(targetURL string, timeout time.Duration) int {
+	client := &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+		},
+	}
+	resp, err := client.Get(targetURL)
+	if err != nil {
+		return 1
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return 0
+	}
+	return 1
+}
+
 func Run() {
+	if code, handled := maybeRunHealthcheck(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 	log.SetFlags(0)
 	cfg, err := loadConfig()
 	if err != nil {

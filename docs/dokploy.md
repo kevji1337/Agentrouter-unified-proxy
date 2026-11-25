@@ -119,23 +119,17 @@ With automatic deployments enabled, a push to `main` triggers a rebuild. For a
 manual deployment, use Dokploy's Redeploy action. Keep the `/data` volume
 attached between deployments.
 
-### Faster Dockerfile rebuilds
+### Faster Dockerfile rebuilds and rollouts
 
-The Dockerfile separates `go mod download` from source compilation. Source/UI edits
-reuse the dependency layer when `go.mod`/`go.sum` are unchanged. BuildKit also keeps
-Go compilation artifacts in a cache mount, so a rebuild can reuse unchanged packages.
-The production context includes only `Dockerfile`, module manifests, `cmd` and
-`internal` (without Go tests). `.delta`, `.git`, env files, local key data and browser
-smoke outputs are not sent to the builder.
+The Dockerfile separates `go mod download` and full dependency/stdlib pre-compilation
+from application source compilation, storing both `/go/pkg/mod` and `/go/build-cache`
+directly inside the builder stage layer (zero bytes in the final runtime image). When
+`go.mod` and `go.sum` are unchanged, source or UI edits only compile `internal/app`
+and `cmd/proxy` — even when exported image-layer caches (`type=gha` or registry caches)
+are used or BuildKit cache mounts were pruned. Multi-arch builds also cross-compile
+natively on `$BUILDPLATFORM` without slow QEMU compiler emulation.
 
-Keep Docker/BuildKit cache enabled on the Dokploy build host. Reusing the same
-builder allows the compilation cache to survive deployments. Builds with `--no-cache`,
-a new builder or a pruned cache have to repopulate it; an exported image-layer cache
-alone does not guarantee that BuildKit cache-mount contents are restored. The first
-build still downloads dependencies and compiles them. No measured deployment speedup
-is claimed without timings on the actual host.
-
-Runtime image, user, `/data` volume, TLS certificates, binary optimization flags and
-healthcheck remain unchanged. This improves the build phase only, not Dokploy's image
-pull, healthcheck wait or seamless container replacement. The Dockerfile requires
-BuildKit (`RUN --mount`); legacy builders are not supported.
+For faster container replacement during deployments, `HEALTHCHECK` invokes the built-in
+`["/app/proxy", "-healthcheck"]` probe on a 5-second interval instead of waiting 30
+seconds for the first `sh`/`wget` poll. Runtime base image (`alpine:3.21`), non-root
+user (`proxy`), `/data` volume, and TLS certificates remain unchanged.

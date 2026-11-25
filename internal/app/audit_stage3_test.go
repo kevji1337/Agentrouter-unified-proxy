@@ -143,3 +143,37 @@ func TestParallelKeyProbeBatchBoundsConcurrency(t *testing.T) {
 		t.Fatal("probeKeyBatch deadlocked on context cancellation")
 	}
 }
+
+func TestBuiltInContainerHealthcheckCLI(t *testing.T) {
+	if _, handled := maybeRunHealthcheck(nil); handled {
+		t.Fatal("empty args must not trigger healthcheck")
+	}
+	if _, handled := maybeRunHealthcheck([]string{"-unknown"}); handled {
+		t.Fatal("unrelated flag must not trigger healthcheck")
+	}
+
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer healthy.Close()
+
+	if code := probeHealthEndpoint(healthy.URL+"/health", time.Second); code != 0 {
+		t.Fatalf("expected exit code 0 on 200 OK, got %d", code)
+	}
+	if code := probeHealthEndpoint(healthy.URL+"/missing", time.Second); code != 1 {
+		t.Fatalf("expected exit code 1 on 404, got %d", code)
+	}
+	if code := probeHealthEndpoint("http://127.0.0.1:1/health", 200*time.Millisecond); code != 1 {
+		t.Fatalf("expected exit code 1 on unreachable port, got %d", code)
+	}
+
+	t.Setenv("PORT", "invalid-port")
+	if code, handled := maybeRunHealthcheck([]string{"-healthcheck"}); !handled || code != 1 {
+		t.Fatalf("expected handled=true code=1 for invalid PORT, got handled=%v code=%d", handled, code)
+	}
+}

@@ -41,3 +41,5 @@ jobs:
           push: false
           platforms: linux/amd64
           tags: agentrouter-unified-proxy:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
