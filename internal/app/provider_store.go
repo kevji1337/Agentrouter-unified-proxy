@@ -230,6 +230,16 @@ func (store *apiKeyStore) modelManaged(model string) bool {
 	return store.modelManagedLocked(model)
 }
 
+func protocolFilterMatches(keyProtocol, filter string) bool {
+	if filter == "" {
+		return true
+	}
+	if strings.HasPrefix(filter, "/") {
+		return protocolSupportsPath(keyProtocol, filter)
+	}
+	return effectiveProtocol(keyProtocol) == filter
+}
+
 func (store *apiKeyStore) keyEligibleLocked(key persistedAPIKey, excluded map[string]bool, model, protocol string, now time.Time) bool {
 	effective, enabled := store.providerForKeyLocked(key)
 	if !enabled {
@@ -243,7 +253,41 @@ func (store *apiKeyStore) keyEligibleLocked(key persistedAPIKey, excluded map[st
 			return false
 		}
 	}
-	return keyAvailable(effective, excluded, model, now) && (protocol == "" || effectiveProtocol(effective.APIProtocol) == protocol)
+	return keyAvailable(effective, excluded, model, now) && protocolFilterMatches(effective.APIProtocol, protocol)
+}
+
+func (store *apiKeyStore) hasCompatibleKey(model, protocolFilter string) bool {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.loadErr != nil || len(store.keys) == 0 {
+		return false
+	}
+	now := time.Now().UTC()
+	for i := range store.keys {
+		record := &store.keys[i]
+		resetUsagePeriods(record, now)
+		if store.proxyAvailableLocked(*record) && store.keyEligibleLocked(*record, nil, model, protocolFilter, now) {
+			return true
+		}
+	}
+	return false
+}
+
+func (store *apiKeyStore) hasProtocolBlockedKey(excluded map[string]bool, model, protocolFilter string) bool {
+	if protocolFilter == "" {
+		return false
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	now := time.Now().UTC()
+	for i := range store.keys {
+		record := &store.keys[i]
+		resetUsagePeriods(record, now)
+		if store.proxyAvailableLocked(*record) && store.keyEligibleLocked(*record, excluded, model, "", now) && !store.keyEligibleLocked(*record, excluded, model, protocolFilter, now) {
+			return true
+		}
+	}
+	return false
 }
 
 func (server *proxyServer) handleAdminProviders(w http.ResponseWriter, r *http.Request) {

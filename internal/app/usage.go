@@ -2,18 +2,57 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
+	"math"
+	"strconv"
 	"sync"
 )
 
 const maxUsageCaptureBytes = 2 << 20
 
+type outOfBandUsageContextKey struct{}
+
+type outOfBandUsage struct {
+	mu     sync.Mutex
+	input  uint64
+	output uint64
+	set    bool
+}
+
+func withOutOfBandUsage(ctx context.Context) (context.Context, *outOfBandUsage) {
+	holder := &outOfBandUsage{}
+	return context.WithValue(ctx, outOfBandUsageContextKey{}, holder), holder
+}
+
+func recordOutOfBandUsage(ctx context.Context, input, output uint64) {
+	holder, _ := ctx.Value(outOfBandUsageContextKey{}).(*outOfBandUsage)
+	if holder == nil || (input == 0 && output == 0) {
+		return
+	}
+	holder.mu.Lock()
+	holder.input = input
+	holder.output = output
+	holder.set = true
+	holder.mu.Unlock()
+}
+
+func (holder *outOfBandUsage) load() (uint64, uint64, bool) {
+	if holder == nil {
+		return 0, 0, false
+	}
+	holder.mu.Lock()
+	defer holder.mu.Unlock()
+	return holder.input, holder.output, holder.set
+}
+
 type usageTrackingBody struct {
-	body    io.ReadCloser
-	buffer  []byte
-	onUsage func(input, output uint64)
-	once    sync.Once
+	body     io.ReadCloser
+	buffer   []byte
+	fallback *outOfBandUsage
+	onUsage  func(input, output uint64)
+	once     sync.Once
 }
 
 type releaseBody struct {
@@ -40,7 +79,11 @@ func (body *releaseBody) Close() error {
 }
 
 func newUsageTrackingBody(body io.ReadCloser, onUsage func(input, output uint64)) io.ReadCloser {
-	return &usageTrackingBody{body: body, onUsage: onUsage}
+	return newUsageTrackingBodyWithFallback(body, nil, onUsage)
+}
+
+func newUsageTrackingBodyWithFallback(body io.ReadCloser, fallback *outOfBandUsage, onUsage func(input, output uint64)) io.ReadCloser {
+	return &usageTrackingBody{body: body, fallback: fallback, onUsage: onUsage}
 }
 
 func (body *usageTrackingBody) Read(target []byte) (int, error) {
@@ -74,6 +117,11 @@ func (body *usageTrackingBody) capture(chunk []byte) {
 func (body *usageTrackingBody) finalize() {
 	body.once.Do(func() {
 		input, output := parseUsage(body.buffer)
+		if input == 0 && output == 0 {
+			if fbIn, fbOut, ok := body.fallback.load(); ok {
+				input, output = fbIn, fbOut
+			}
+		}
 		if input > 0 || output > 0 {
 			body.onUsage(input, output)
 		}
@@ -123,11 +171,27 @@ func usageFromJSON(raw []byte) (uint64, uint64, bool) {
 func uint64Value(value any) uint64 {
 	switch number := value.(type) {
 	case float64:
+		if number <= 0 || math.IsNaN(number) || math.IsInf(number, 0) {
+			return 0
+		}
+		if number >= float64(math.MaxUint64) {
+			return math.MaxUint64
+		}
 		return uint64(number)
 	case json.Number:
-		parsed, _ := number.Int64()
-		return uint64(max(parsed, 0))
+		if parsed, err := number.Int64(); err == nil {
+			return uint64(max(parsed, 0))
+		}
+		if parsedU, err := strconv.ParseUint(number.String(), 10, 64); err == nil {
+			return parsedU
+		}
+		if parsedF, err := number.Float64(); err == nil {
+			return uint64Value(parsedF)
+		}
+		return 0
 	case int:
+		return uint64(max(number, 0))
+	case int64:
 		return uint64(max(number, 0))
 	case uint64:
 		return number

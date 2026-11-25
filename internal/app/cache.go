@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 )
+
+const maxCustomCacheTTL = 24 * time.Hour
 
 type cacheItem struct {
 	body      []byte
@@ -55,33 +58,27 @@ func (c *responseCache) setRedis(client *redis.Client) {
 }
 
 func computeCacheKey(obj map[string]any) (string, error) {
-	canonical := make(map[string]any)
-	if model, ok := obj["model"].(string); ok {
-		canonical["model"] = strings.TrimSpace(model)
+	return computeCacheKeyScoped(obj, "")
+}
+
+func computeCacheKeyScoped(obj map[string]any, authScope string) (string, error) {
+	canonical := make(map[string]any, len(obj)+1)
+	for k, v := range obj {
+		switch k {
+		case "stream", "stream_options", "user":
+			continue
+		case "model":
+			if s, ok := v.(string); ok {
+				canonical["model"] = strings.TrimSpace(s)
+			} else {
+				canonical["model"] = v
+			}
+		default:
+			canonical[k] = v
+		}
 	}
-	if msgs, ok := obj["messages"]; ok {
-		canonical["messages"] = msgs
-	}
-	if tools, ok := obj["tools"]; ok {
-		canonical["tools"] = tools
-	}
-	if toolChoice, ok := obj["tool_choice"]; ok {
-		canonical["tool_choice"] = toolChoice
-	}
-	if format, ok := obj["response_format"]; ok {
-		canonical["response_format"] = format
-	}
-	if maxTokens, ok := obj["max_tokens"]; ok {
-		canonical["max_tokens"] = maxTokens
-	}
-	if maxComp, ok := obj["max_completion_tokens"]; ok {
-		canonical["max_completion_tokens"] = maxComp
-	}
-	if seed, ok := obj["seed"]; ok {
-		canonical["seed"] = seed
-	}
-	if sys, ok := obj["system"]; ok {
-		canonical["system"] = sys
+	if authScope != "" {
+		canonical["__auth_scope"] = authScope
 	}
 
 	raw, err := json.Marshal(canonical)
@@ -114,6 +111,10 @@ func toFloat64(val any) (float64, bool) {
 }
 
 func (c *responseCache) isCacheable(r *http.Request, body []byte, obj map[string]any) (string, time.Duration, bool) {
+	return c.isCacheableScoped(r, body, obj, "")
+}
+
+func (c *responseCache) isCacheableScoped(r *http.Request, _ []byte, obj map[string]any, authScope string) (string, time.Duration, bool) {
 	if c == nil || !c.enabled {
 		return "", 0, false
 	}
@@ -146,8 +147,11 @@ func (c *responseCache) isCacheable(r *http.Request, body []byte, obj map[string
 			ttl = time.Duration(sec) * time.Second
 		}
 	}
+	if ttl > maxCustomCacheTTL {
+		ttl = maxCustomCacheTTL
+	}
 
-	key, err := computeCacheKey(obj)
+	key, err := computeCacheKeyScoped(obj, authScope)
 	if err != nil {
 		return "", 0, false
 	}
@@ -183,7 +187,7 @@ func (c *responseCache) get(ctx context.Context, key string) ([]byte, bool) {
 			return nil, false
 		}
 		c.hits.Add(1)
-		return item.body, true
+		return bytes.Clone(item.body), true
 	}
 
 	c.misses.Add(1)
@@ -233,7 +237,7 @@ func (c *responseCache) set(ctx context.Context, key string, body []byte, ttl ti
 	}
 
 	c.items[key] = cacheItem{
-		body:      body,
+		body:      bytes.Clone(body),
 		expiresAt: time.Now().Add(ttl),
 	}
 }

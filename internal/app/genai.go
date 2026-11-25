@@ -24,25 +24,34 @@ func sanitizeErrorMessage(msg, apiKey string) string {
 	return msg
 }
 
-func formatGenAIErrorResponse(status int, err error, apiKey string) *http.Response {
+func extractGenAIAPIError(err error) (int, string, bool) {
 	var apiErr genai.APIError
-	var pApiErr *genai.APIError
-	msg := ""
-	if errors.As(err, &apiErr) {
-		status = apiErr.Code
-		msg = apiErr.Message
+	if errors.As(err, &apiErr) && apiErr.Code > 0 {
+		msg := apiErr.Message
 		if msg == "" {
 			msg = apiErr.Status
 		}
-	} else if errors.As(err, &pApiErr) && pApiErr != nil {
-		status = pApiErr.Code
-		msg = pApiErr.Message
+		return apiErr.Code, msg, true
+	}
+	var pApiErr *genai.APIError
+	if errors.As(err, &pApiErr) && pApiErr != nil && pApiErr.Code > 0 {
+		msg := pApiErr.Message
 		if msg == "" {
 			msg = pApiErr.Status
 		}
+		return pApiErr.Code, msg, true
 	}
-	if msg == "" && err != nil {
-		msg = err.Error()
+	return 0, "", false
+}
+
+func formatGenAIErrorResponse(status int, err error, apiKey string) *http.Response {
+	msg := ""
+	if code, apiMsg, ok := extractGenAIAPIError(err); ok {
+		status = code
+		msg = apiMsg
+	}
+	if msg == "" && status > 0 {
+		msg = http.StatusText(status)
 	}
 	if status == 0 {
 		var netErr net.Error
@@ -51,6 +60,7 @@ func formatGenAIErrorResponse(status int, err error, apiKey string) *http.Respon
 		} else {
 			status = http.StatusBadGateway
 		}
+		msg = "upstream request failed"
 	}
 	msg = sanitizeErrorMessage(msg, apiKey)
 	errPayload, _ := json.Marshal(map[string]any{
@@ -138,11 +148,14 @@ func (server *proxyServer) handleGenAIModels(ctx context.Context, route *outboun
 		HTTPOptions: genai.HTTPOptions{BaseURL: baseURLStr},
 	})
 	if err != nil {
-		return formatGenAIErrorResponse(http.StatusBadRequest, err, apiKey), nil
+		return nil, err
 	}
 	page, err := client.Models.List(ctx, nil)
 	if err != nil {
-		return formatGenAIErrorResponse(0, err, apiKey), nil
+		if _, _, ok := extractGenAIAPIError(err); ok {
+			return formatGenAIErrorResponse(0, err, apiKey), nil
+		}
+		return nil, err
 	}
 	type openAIModel struct {
 		ID      string `json:"id"`
@@ -178,6 +191,14 @@ func (server *proxyServer) handleGenAIModels(ctx context.Context, route *outboun
 }
 
 func (server *proxyServer) executeGenAI(ctx context.Context, route *outboundRoute, baseURL *url.URL, key *selectedAPIKey, model string, body []byte, stream bool) (*http.Response, error) {
+	reqModel, contents, config, meta, err := buildGenAIRequest(body)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errInvalidUpstreamRequest, err)
+	}
+	if reqModel != "" {
+		model = reqModel
+	}
+
 	apiKey := ""
 	if key != nil {
 		apiKey = key.Key
@@ -193,15 +214,7 @@ func (server *proxyServer) executeGenAI(ctx context.Context, route *outboundRout
 		HTTPOptions: genai.HTTPOptions{BaseURL: baseURLStr},
 	})
 	if err != nil {
-		return formatGenAIErrorResponse(http.StatusBadRequest, err, apiKey), nil
-	}
-
-	reqModel, contents, config, meta, err := buildGenAIRequest(body)
-	if err != nil {
-		return formatGenAIErrorResponse(http.StatusBadRequest, err, apiKey), nil
-	}
-	if reqModel != "" {
-		model = reqModel
+		return nil, err
 	}
 
 	if stream {
@@ -210,7 +223,10 @@ func (server *proxyServer) executeGenAI(ctx context.Context, route *outboundRout
 
 	resp, err := client.Models.GenerateContent(ctx, model, contents, config)
 	if err != nil {
-		return formatGenAIErrorResponse(0, err, apiKey), nil
+		if _, _, ok := extractGenAIAPIError(err); ok {
+			return formatGenAIErrorResponse(0, err, apiKey), nil
+		}
+		return nil, err
 	}
 
 	convertedJSON, err := convertGenAIResponse(resp, meta.Model)
@@ -784,12 +800,14 @@ type firstStreamResult struct {
 }
 
 func streamGenAIResponse(ctx context.Context, client *genai.Client, model string, contents []*genai.Content, config *genai.GenerateContentConfig, meta *requestMeta, apiKey string) (*http.Response, error) {
-	iterator := client.Models.GenerateContentStream(ctx, model, contents, config)
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	iterator := client.Models.GenerateContentStream(streamCtx, model, contents, config)
 
 	pr, pw := io.Pipe()
 	firstCh := make(chan firstStreamResult, 1)
 
 	go func() {
+		defer cancelStream()
 		streamID := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
 		created := time.Now().Unix()
 		roleSent := false
@@ -829,7 +847,10 @@ func streamGenAIResponse(ctx context.Context, client *genai.Client, model string
 						},
 					},
 				}
-				_ = writeStreamSSE(pw, roleChunk)
+				if writeErr := writeStreamSSE(pw, roleChunk); writeErr != nil {
+					_ = pw.CloseWithError(writeErr)
+					return
+				}
 				roleSent = true
 			}
 
@@ -851,7 +872,10 @@ func streamGenAIResponse(ctx context.Context, client *genai.Client, model string
 									},
 								},
 							}
-							_ = writeStreamSSE(pw, thoughtChunk)
+							if writeErr := writeStreamSSE(pw, thoughtChunk); writeErr != nil {
+								_ = pw.CloseWithError(writeErr)
+								return
+							}
 						} else if part.Text != "" {
 							textChunk := map[string]any{
 								"id":      streamID,
@@ -866,7 +890,10 @@ func streamGenAIResponse(ctx context.Context, client *genai.Client, model string
 									},
 								},
 							}
-							_ = writeStreamSSE(pw, textChunk)
+							if writeErr := writeStreamSSE(pw, textChunk); writeErr != nil {
+								_ = pw.CloseWithError(writeErr)
+								return
+							}
 						}
 						if part.FunctionCall != nil {
 							callID := part.FunctionCall.ID
@@ -900,7 +927,10 @@ func streamGenAIResponse(ctx context.Context, client *genai.Client, model string
 								},
 							}
 							toolIndex++
-							_ = writeStreamSSE(pw, toolChunk)
+							if writeErr := writeStreamSSE(pw, toolChunk); writeErr != nil {
+								_ = pw.CloseWithError(writeErr)
+								return
+							}
 						}
 					}
 				}
@@ -935,32 +965,50 @@ func streamGenAIResponse(ctx context.Context, client *genai.Client, model string
 				},
 			},
 		}
-		_ = writeStreamSSE(pw, finishChunk)
-
-		if meta.IncludeUsage && latestUsage != nil {
-			usageChunk := map[string]any{
-				"id":      streamID,
-				"object":  "chat.completion.chunk",
-				"created": created,
-				"model":   meta.Model,
-				"choices": []any{},
-				"usage":   convertGenAIUsage(latestUsage),
-			}
-			_ = writeStreamSSE(pw, usageChunk)
+		if writeErr := writeStreamSSE(pw, finishChunk); writeErr != nil {
+			_ = pw.CloseWithError(writeErr)
+			return
 		}
 
-		_, _ = io.WriteString(pw, "data: [DONE]\n\n")
+		if latestUsage != nil {
+			if meta.IncludeUsage {
+				usageChunk := map[string]any{
+					"id":      streamID,
+					"object":  "chat.completion.chunk",
+					"created": created,
+					"model":   meta.Model,
+					"choices": []any{},
+					"usage":   convertGenAIUsage(latestUsage),
+				}
+				if writeErr := writeStreamSSE(pw, usageChunk); writeErr != nil {
+					_ = pw.CloseWithError(writeErr)
+					return
+				}
+			} else {
+				recordOutOfBandUsage(ctx, uint64(max(latestUsage.PromptTokenCount, 0)), uint64(max(latestUsage.CandidatesTokenCount, 0)))
+			}
+		}
+
+		if _, writeErr := io.WriteString(pw, "data: [DONE]\n\n"); writeErr != nil {
+			_ = pw.CloseWithError(writeErr)
+			return
+		}
 		_ = pw.Close()
 	}()
 
 	select {
 	case <-ctx.Done():
+		cancelStream()
 		_ = pr.Close()
 		return nil, ctx.Err()
 	case res := <-firstCh:
 		if res.firstErr != nil {
+			cancelStream()
 			_ = pr.Close()
-			return formatGenAIErrorResponse(0, res.firstErr, apiKey), nil
+			if _, _, ok := extractGenAIAPIError(res.firstErr); ok {
+				return formatGenAIErrorResponse(0, res.firstErr, apiKey), nil
+			}
+			return nil, res.firstErr
 		}
 	}
 

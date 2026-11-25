@@ -3,6 +3,7 @@ package app
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -95,6 +96,9 @@ func convertResponsesSSE(w http.ResponseWriter, body io.Reader, meta requestMeta
 			dataLines = append(dataLines, value)
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
 	if !state.Finalized {
 		if err := process(); err != nil {
 			return err
@@ -109,7 +113,7 @@ func convertResponsesSSE(w http.ResponseWriter, body io.Reader, meta requestMeta
 		return err
 	}
 	flush(w)
-	return scanner.Err()
+	return nil
 }
 
 func handleResponsesEvent(w http.ResponseWriter, event map[string]any, state *chatStreamState) error {
@@ -206,10 +210,17 @@ func handleResponsesEvent(w http.ResponseWriter, event map[string]any, state *ch
 		storeCompletedToolArguments(tool, stringValue(item["arguments"], ""))
 		return nil
 
-	case "response.completed", "response.done", "response.incomplete", "response.failed":
+	case "response.failed", "error":
+		return errors.New("upstream responses stream reported failure")
+
+	case "response.completed", "response.done", "response.incomplete":
 		updateStreamIdentity(state, event)
 		response, _ := event["response"].(map[string]any)
 		if response != nil {
+			status, _ := response["status"].(string)
+			if status == "failed" {
+				return errors.New("upstream response status failed")
+			}
 			if err := reconcileTerminalTools(w, state, response); err != nil {
 				return err
 			}
@@ -217,7 +228,6 @@ func handleResponsesEvent(w http.ResponseWriter, event map[string]any, state *ch
 			if state.SawTool {
 				finishReason = "tool_calls"
 			}
-			status, _ := response["status"].(string)
 			if status == "incomplete" {
 				finishReason = "length"
 				if details, ok := response["incomplete_details"].(map[string]any); ok {
@@ -249,8 +259,15 @@ func updateStreamIdentity(state *chatStreamState, event map[string]any) {
 	if model, ok := response["model"].(string); ok && model != "" {
 		state.Model = model
 	}
-	if created, ok := response["created_at"].(float64); ok && created > 0 {
-		state.Created = int64(created)
+	switch created := response["created_at"].(type) {
+	case float64:
+		if created > 0 {
+			state.Created = int64(created)
+		}
+	case json.Number:
+		if v, err := created.Int64(); err == nil && v > 0 {
+			state.Created = v
+		}
 	}
 }
 
@@ -513,10 +530,25 @@ func writeSyntheticChatStream(w http.ResponseWriter, chatJSON []byte, includeUsa
 		choice, _ := choices[0].(map[string]any)
 		message, _ := choice["message"].(map[string]any)
 		delta := map[string]any{"role": "assistant"}
-		for _, key := range []string{"content", "refusal", "tool_calls"} {
+		for _, key := range []string{"content", "refusal", "reasoning_content"} {
 			if value, ok := message[key]; ok && value != nil {
 				delta[key] = value
 			}
+		}
+		if rawCalls, ok := message["tool_calls"].([]any); ok && len(rawCalls) > 0 {
+			indexedCalls := make([]any, 0, len(rawCalls))
+			for idx, rawCall := range rawCalls {
+				if callMap, ok := rawCall.(map[string]any); ok {
+					cloned := cloneMap(callMap)
+					if _, hasIndex := cloned["index"]; !hasIndex {
+						cloned["index"] = idx
+					}
+					indexedCalls = append(indexedCalls, cloned)
+				} else {
+					indexedCalls = append(indexedCalls, rawCall)
+				}
+			}
+			delta["tool_calls"] = indexedCalls
 		}
 		chunk := cloneMap(base)
 		chunk["choices"] = []any{map[string]any{

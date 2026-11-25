@@ -48,6 +48,7 @@ func (server *proxyServer) handleAdminPage(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
 	_, _ = io.WriteString(w, adminDashboardHTML)
 }
 
@@ -58,6 +59,7 @@ func (server *proxyServer) handleOpenAPI(w http.ResponseWriter, r *http.Request)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write(openAPISpec)
 }
 
@@ -67,7 +69,10 @@ func (server *proxyServer) handleAPIDocs(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
 	_, _ = io.WriteString(w, apiDocsHTML)
 }
 
@@ -305,7 +310,7 @@ func (server *proxyServer) handleAdminStatus(w http.ResponseWriter, r *http.Requ
 		"key_health_interval": server.cfg.KeyHealthInterval.String(), "last_key_health_at": optionalTime(lastKeyHealth),
 		"key_recovery_interval": server.cfg.KeyRecoveryInterval.String(),
 		"response_cache":        server.cache.stats(),
-		"store": server.keys.status(), "force_sequential_tools": server.cfg.ForceSequentialTools,
+		"store":                 server.keys.status(), "force_sequential_tools": server.cfg.ForceSequentialTools,
 		"stateless_responses": server.cfg.StatelessResponses,
 		"infrastructure":      server.infra.health(),
 		"admin":               map[string]any{"name": account.Name, "role": account.Role, "password_set": passwordSet},

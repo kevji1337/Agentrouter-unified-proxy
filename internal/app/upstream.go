@@ -2,7 +2,7 @@ package app
 
 import (
 	"errors"
-	"net"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -46,22 +46,73 @@ func parseUpstreamURL(raw string) (*url.URL, error) {
 			return nil, errors.New("base_url port must be between 1 and 65535")
 		}
 	}
-	hostname := strings.ToLower(parsed.Hostname())
-	if hostname == "metadata.google.internal" || hostname == "instance-data" || hostname == "metadata" || (strings.HasSuffix(hostname, ".internal") && strings.Contains(hostname, "metadata")) {
+	rawHost := strings.ToLower(parsed.Hostname())
+	cleanHost := strings.TrimRight(rawHost, ".")
+	if cleanHost == "" {
+		return nil, errors.New("base_url must be an absolute http(s) URL")
+	}
+	if cleanHost == "metadata.google.internal" || cleanHost == "instance-data" || cleanHost == "metadata" || (strings.HasSuffix(cleanHost, ".internal") && strings.Contains(cleanHost, "metadata")) {
 		return nil, errors.New("base_url must not target cloud metadata endpoints")
 	}
-	if ip := net.ParseIP(hostname); ip != nil {
-		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-			return nil, errors.New("base_url must not target link-local or metadata addresses")
-		}
+	baseHost, zone, hasZone := strings.Cut(cleanHost, "%")
+	if hasZone && (baseHost == "" || zone == "") {
+		return nil, errors.New("base_url contains invalid IPv6 zone")
 	}
-	if _, err := strconv.ParseUint(hostname, 10, 64); err == nil {
-		return nil, errors.New("base_url must not use integer IP representations")
+	if addr, addrErr := netip.ParseAddr(baseHost); addrErr == nil {
+		unmapped := addr.Unmap()
+		if hasZone || unmapped.IsUnspecified() || unmapped.IsMulticast() || unmapped.IsLinkLocalUnicast() || unmapped.IsLinkLocalMulticast() || isCloudMetadataAddr(unmapped) {
+			return nil, errors.New("base_url must not target link-local, unspecified, multicast, or metadata addresses")
+		}
+	} else if hasNonStandardNumericIP(cleanHost) {
+		return nil, errors.New("base_url must not use non-standard numeric IP representations")
 	}
 	// Do not clean or discard provider-specific path segments.
 	parsed.Path = strings.TrimRight(parsed.Path, "/")
 	parsed.RawPath = strings.TrimRight(parsed.RawPath, "/")
 	return parsed, nil
+}
+
+func isCloudMetadataAddr(addr netip.Addr) bool {
+	// Alibaba Cloud ECS metadata (100.100.100.200) and AWS EC2 IPv6 IMDS (fd00:ec2::254).
+	return addr == netip.MustParseAddr("100.100.100.200") || addr == netip.MustParseAddr("fd00:ec2::254")
+}
+
+func hasNonStandardNumericIP(host string) bool {
+	labels := strings.Split(host, ".")
+	if len(labels) == 0 {
+		return false
+	}
+	for _, label := range labels {
+		if label == "" {
+			return false
+		}
+		if _, err := strconv.ParseUint(label, 0, 64); err == nil {
+			continue
+		}
+		allDigits := true
+		for i := 0; i < len(label); i++ {
+			if label[i] < '0' || label[i] > '9' {
+				allDigits = false
+				break
+			}
+		}
+		if !allDigits {
+			return false
+		}
+	}
+	return true
+}
+
+func protocolSupportsPath(protocol, path string) bool {
+	pathOnly, _, _ := strings.Cut(path, "?")
+	p := effectiveProtocol(protocol)
+	if pathOnly == "/v1/responses" {
+		return p == protocolResponses
+	}
+	if p == protocolGenAI {
+		return pathOnly == "/v1/chat/completions" || pathOnly == "/v1/models" || pathOnly == "/models"
+	}
+	return true
 }
 
 func upstreamOrigin(base *url.URL) string {
@@ -131,7 +182,7 @@ func (server *proxyServer) usesWAFCookies(base *url.URL, profile string) bool {
 // change protocols without reusing a payload converted for another upstream.
 func (server *proxyServer) prepareUpstream(path string, body []byte, protocol string) (string, []byte, *requestMeta, error) {
 	if protocol == protocolGenAI {
-		if path != "/v1/chat/completions" && path != "/v1/models" && path != "/models" {
+		if !protocolSupportsPath(protocolGenAI, path) {
 			return "", nil, nil, errNoCompatibleUpstream
 		}
 		return path, body, nil, nil

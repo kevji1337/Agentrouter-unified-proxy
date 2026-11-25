@@ -178,15 +178,14 @@ func (metrics *proxyMetrics) observe(path string, status int, duration time.Dura
 	}
 }
 
-func (metrics *proxyMetrics) handler(cookies *cookieStore, keys *apiKeyStore) http.HandlerFunc {
+func (metrics *proxyMetrics) handler(wafPresent func() bool, keys *apiKeyStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")
 			return
 		}
-		cookiePresent, _, _, _ := cookies.status()
 		cookieValue := 0
-		if cookiePresent {
+		if wafPresent != nil && wafPresent() {
 			cookieValue = 1
 		}
 		keyStatus := keys.status()

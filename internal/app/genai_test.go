@@ -796,5 +796,3 @@ func TestHealthAndCORSGenAI(t *testing.T) {
 		t.Errorf("expected CORS allow headers to include admin headers, got %s", allowHeaders)
 	}
 }
-
-

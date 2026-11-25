@@ -195,9 +195,9 @@ func requestLogLevel(status int, fields map[string]any) string {
 
 func logCategory(event string) string {
 	switch event {
-	case "request_completed":
+	case "request_completed", "cache_hit":
 		return "requests"
-	case "api_key_failover", "upstream_transport_retry", "upstream_status_retry", "waf_block_retry", "azure_resource_state_retry", "no_available_api_keys":
+	case "api_key_failover", "upstream_transport_retry", "upstream_status_retry", "waf_block_retry", "azure_resource_state_retry", "no_available_api_keys", "key_cooldown_recovered", "cooling_keys_recovery_completed":
 		return "routing"
 	case "tool_call_emitted", "parallel_tools_suppressed", "invalid_streamed_tool_arguments":
 		return "tools"
@@ -215,7 +215,7 @@ func logIsBackground(event string, fields map[string]any) bool {
 		return false
 	}
 	switch event {
-	case "tool_call_emitted", "key_health_completed", "waf_warmup_succeeded":
+	case "tool_call_emitted", "key_health_completed", "cooling_keys_recovery_completed", "waf_warmup_succeeded":
 		return true
 	case "request_completed":
 		path, _ := fields["path"].(string)
@@ -304,6 +304,12 @@ func logSummary(event string, fields map[string]any) string {
 		return fmt.Sprintf("Проверка ключей: %s проверено · %s принято · %s ошибок · %s не подтверждено", value("checked"), value("accepted"), value("failed"), value("inconclusive"))
 	case "key_health_failed":
 		return fmt.Sprintf("Проверка %s / %s: HTTP %s — %s", value("provider"), value("key_name"), value("status"), value("reason"))
+	case "key_cooldown_recovered":
+		return fmt.Sprintf("Ключ восстановлен из cooldown: %s / %s (HTTP %s)", value("provider"), value("key_name"), value("status"))
+	case "cooling_keys_recovery_completed":
+		return fmt.Sprintf("Проверка ключей в cooldown: %s проверено · %s восстановлено", value("checked"), value("recovered"))
+	case "cache_hit":
+		return fmt.Sprintf("Ответ из кэша · модель %s (%s)", value("model"), value("cache_key"))
 	case "admin_password_changed":
 		return "Пароль администратора изменён; предыдущие сессии отозваны"
 	case "admin_key_updated":

@@ -65,6 +65,22 @@ func (store *apiKeyStore) adminPassword(account *adminAccount) (savedAdminPasswo
 	return savedAdminPassword{}, false
 }
 
+func acquirePasswordWork(timeout time.Duration) bool {
+	select {
+	case adminPasswordWork <- struct{}{}:
+		return true
+	default:
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case adminPasswordWork <- struct{}{}:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
 func passwordMatches(password string, record savedAdminPassword) bool {
 	if len(password) > 1024 {
 		return false
@@ -77,9 +93,7 @@ func passwordMatches(password string, record savedAdminPassword) bool {
 	if err != nil || len(expected) != 32 {
 		return false
 	}
-	select {
-	case adminPasswordWork <- struct{}{}:
-	default:
+	if !acquirePasswordWork(2 * time.Second) {
 		return false
 	}
 	hash, err := pbkdf2.Key(sha256.New, password, salt, adminPasswordIterations, 32)
@@ -95,9 +109,7 @@ func (store *apiKeyStore) setAdminPassword(account *adminAccount, password strin
 	if _, err := rand.Read(salt); err != nil {
 		return err
 	}
-	select {
-	case adminPasswordWork <- struct{}{}:
-	default:
+	if !acquirePasswordWork(2 * time.Second) {
 		return errors.New("password service busy; retry shortly")
 	}
 	hash, err := pbkdf2.Key(sha256.New, password, salt, adminPasswordIterations, 32)

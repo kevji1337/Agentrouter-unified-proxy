@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -207,14 +209,14 @@ func loadConfig() (config, error) {
 		StatelessResponses: statelessResponses,
 		AdminToken:         adminToken, AdminAccounts: adminAccounts, KeyStorePath: envDefault("KEY_STORE_PATH", "/data/keys.json"),
 		KeyStoreSecret: keyStoreSecret, KeySelectionMode: keySelectionMode, KeyFailover: keyFailover,
-		KeyCooldown:       keyCooldown,
-		KeyHealthInterval: keyHealthInterval,
-		KeyRecoveryInterval: keyRecoveryInterval,
-		ResponseCache:       responseCache,
-		ResponseCacheTTL:    responseCacheTTL,
+		KeyCooldown:           keyCooldown,
+		KeyHealthInterval:     keyHealthInterval,
+		KeyRecoveryInterval:   keyRecoveryInterval,
+		ResponseCache:         responseCache,
+		ResponseCacheTTL:      responseCacheTTL,
 		ResponseCacheMaxItems: responseCacheMaxItems,
-		ResponseCacheAll:    responseCacheAll,
-		DatabaseURL:       strings.TrimSpace(os.Getenv("DATABASE_URL")), RedisURL: strings.TrimSpace(os.Getenv("REDIS_URL")),
+		ResponseCacheAll:      responseCacheAll,
+		DatabaseURL:           strings.TrimSpace(os.Getenv("DATABASE_URL")), RedisURL: strings.TrimSpace(os.Getenv("REDIS_URL")),
 		StorageBackend: storageBackend, TelegramBotToken: strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
 		TelegramChatID: strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")), AlertCooldown: alertCooldown,
 	}, nil
@@ -471,6 +473,7 @@ type proxyServer struct {
 	keys          *apiKeyStore
 	routingMode   atomic.Value
 	lastKeyHealth atomic.Value
+	probeRunning  atomic.Bool
 	adminMu       sync.Mutex
 	adminSessions map[string]adminSession
 	loginAttempts map[string]loginAttemptWindow
@@ -528,11 +531,7 @@ func newProxyServer(cfg config) *proxyServer {
 	if cfg.KeyRecoveryInterval <= 0 {
 		cfg.KeyRecoveryInterval = time.Minute
 	}
-	cacheEnabled := cfg.ResponseCache
-	if os.Getenv("RESPONSE_CACHE") == "" && !cacheEnabled {
-		cacheEnabled = true
-	}
-	server.cache = newResponseCache(cacheEnabled, cacheTTL, cacheMaxItems, cfg.ResponseCacheAll)
+	server.cache = newResponseCache(cfg.ResponseCache, cacheTTL, cacheMaxItems, cfg.ResponseCacheAll)
 	return server
 }
 
@@ -542,6 +541,16 @@ func (server *proxyServer) currentKeySelectionMode() string {
 		return server.cfg.KeySelectionMode
 	}
 	return mode
+}
+
+const maxConcurrentKeyProbes = 4
+
+func (server *proxyServer) runExclusiveProbe(ctx context.Context, fn func(context.Context)) {
+	if !server.probeRunning.CompareAndSwap(false, true) {
+		return
+	}
+	defer server.probeRunning.Store(false)
+	fn(ctx)
 }
 
 func (server *proxyServer) keyHealthLoop(ctx context.Context) {
@@ -554,7 +563,7 @@ func (server *proxyServer) keyHealthLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(2 * time.Second):
-			server.probeAllKeys(ctx)
+			server.runExclusiveProbe(ctx, server.probeAllKeys)
 		}
 	}()
 
@@ -573,11 +582,67 @@ func (server *proxyServer) keyHealthLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-fullTicker.C:
-			server.probeAllKeys(ctx)
+			server.runExclusiveProbe(ctx, server.probeAllKeys)
 		case <-recoveryTicker.C:
-			server.probeCoolingKeys(ctx)
+			server.runExclusiveProbe(ctx, func(c context.Context) {
+				_, _ = server.probeCoolingKeys(c)
+			})
 		}
 	}
+}
+
+type keyProbeResult struct {
+	key     selectedAPIKey
+	status  int
+	message string
+}
+
+func (server *proxyServer) probeKeyBatch(ctx context.Context, keys []selectedAPIKey) []keyProbeResult {
+	if len(keys) == 0 {
+		return nil
+	}
+	if len(keys) == 1 {
+		if ctx.Err() != nil {
+			return nil
+		}
+		status, message := server.probeAPIKey(ctx, keys[0])
+		return []keyProbeResult{{key: keys[0], status: status, message: message}}
+	}
+	results := make([]keyProbeResult, len(keys))
+	used := make([]bool, len(keys))
+	sem := make(chan struct{}, min(maxConcurrentKeyProbes, len(keys)))
+	var wg sync.WaitGroup
+loop:
+	for i, key := range keys {
+		if ctx.Err() != nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			break loop
+		case sem <- struct{}{}:
+		}
+		if ctx.Err() != nil {
+			<-sem
+			break
+		}
+		used[i] = true
+		wg.Add(1)
+		go func(idx int, k selectedAPIKey) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			status, message := server.probeAPIKey(ctx, k)
+			results[idx] = keyProbeResult{key: k, status: status, message: message}
+		}(i, key)
+	}
+	wg.Wait()
+	filtered := make([]keyProbeResult, 0, len(keys))
+	for i := range results {
+		if used[i] {
+			filtered = append(filtered, results[i])
+		}
+	}
+	return filtered
 }
 
 func (server *proxyServer) probeCoolingKeys(ctx context.Context) (checked, recovered int) {
@@ -585,21 +650,18 @@ func (server *proxyServer) probeCoolingKeys(ctx context.Context) (checked, recov
 	if err != nil || len(keys) == 0 {
 		return 0, 0
 	}
-	for _, key := range keys {
-		if ctx.Err() != nil {
-			return checked, recovered
-		}
-		checked++
-		status, message := server.probeAPIKey(ctx, key)
-		if status >= 200 && status < 300 {
+	results := server.probeKeyBatch(ctx, keys)
+	checked = len(results)
+	for _, res := range results {
+		if res.status >= 200 && res.status < 300 {
 			recovered++
-			server.keys.recordResult(key.ID, status, "", 0)
+			server.keys.recordResult(res.key.ID, res.status, "", 0)
 			logEvent("info", "key_cooldown_recovered", map[string]any{
-				"key_id": key.ID, "key_name": key.Name, "provider": providerLogName(&key),
-				"status": status,
+				"key_id": res.key.ID, "key_name": res.key.Name, "provider": providerLogName(&res.key),
+				"status": res.status,
 			})
-		} else if !probeInconclusive(status) {
-			server.keys.recordResult(key.ID, status, message, server.cfg.KeyCooldown)
+		} else if !probeInconclusive(res.status) {
+			server.keys.recordResult(res.key.ID, res.status, res.message, server.cfg.KeyCooldown)
 		}
 	}
 	if recovered > 0 {
@@ -620,27 +682,24 @@ func (server *proxyServer) probeAllKeysWithStats(ctx context.Context) (checked, 
 		logEvent("error", "key_health_load_failed", map[string]any{"error": err.Error()})
 		return 0, 0, 0, 0
 	}
-	checked = len(keys)
-	for _, key := range keys {
-		if ctx.Err() != nil {
-			return checked, accepted, failed, inconclusive
-		}
-		status, message := server.probeAPIKey(ctx, key)
-		if probeInconclusive(status) {
+	results := server.probeKeyBatch(ctx, keys)
+	checked = len(results)
+	for _, res := range results {
+		if probeInconclusive(res.status) {
 			inconclusive++
-		} else if status >= 200 && status < 300 {
+		} else if res.status >= 200 && res.status < 300 {
 			accepted++
 		} else {
 			failed++
-			logEvent("warn", "key_health_failed", map[string]any{"key_id": key.ID, "key_name": key.Name, "provider": providerLogName(&key), "status": status, "reason": message})
+			logEvent("warn", "key_health_failed", map[string]any{"key_id": res.key.ID, "key_name": res.key.Name, "provider": providerLogName(&res.key), "status": res.status, "reason": res.message})
 		}
-		if !probeInconclusive(status) {
-			server.keys.recordResult(key.ID, status, message, server.cfg.KeyCooldown)
+		if !probeInconclusive(res.status) {
+			server.keys.recordResult(res.key.ID, res.status, res.message, server.cfg.KeyCooldown)
 		}
 	}
 	now := time.Now().UTC()
 	server.lastKeyHealth.Store(now)
-	logEvent("info", "key_health_completed", map[string]any{"checked": len(keys), "accepted": accepted, "failed": failed, "inconclusive": inconclusive})
+	logEvent("info", "key_health_completed", map[string]any{"checked": checked, "accepted": accepted, "failed": failed, "inconclusive": inconclusive})
 	return checked, accepted, failed, inconclusive
 }
 
@@ -680,7 +739,10 @@ func (server *proxyServer) routes() http.Handler {
 	mux.HandleFunc("/docs", server.handleAPIDocs)
 	mux.HandleFunc("/api/admin/", server.handleAdminAPI)
 	mux.HandleFunc("/health", server.handleHealth)
-	mux.HandleFunc("/metrics", server.metrics.handler(server.cookies, server.keys))
+	mux.HandleFunc("/metrics", server.metrics.handler(func() bool {
+		present, _, _, _ := server.wafStatus()
+		return present
+	}, server.keys))
 	mux.HandleFunc("/v1/models", server.handleModels)
 	mux.HandleFunc("/models", server.handleModels)
 	mux.HandleFunc("/v1/chat/completions", server.handleChatCompletions)
@@ -726,11 +788,16 @@ func (server *proxyServer) authenticate(next http.Handler) http.Handler {
 		provided := r.Header.Get("X-Proxy-Token")
 		staticValid := server.cfg.ProxyAuthToken != "" && len(provided) == len(server.cfg.ProxyAuthToken) &&
 			subtle.ConstantTimeCompare([]byte(provided), []byte(server.cfg.ProxyAuthToken)) == 1
-		bearer := ""
-		if authorization := r.Header.Get("Authorization"); strings.HasPrefix(strings.ToLower(authorization), "bearer ") {
-			bearer = strings.TrimSpace(authorization[7:])
+		clientValid := false
+		if hasClientKeys {
+			bearer := ""
+			if authorization := r.Header.Get("Authorization"); strings.HasPrefix(strings.ToLower(authorization), "bearer ") {
+				bearer = strings.TrimSpace(authorization[7:])
+			}
+			if bearer != "" {
+				_, clientValid = server.keys.authenticateClientKey(bearer)
+			}
 		}
-		_, clientValid := server.keys.authenticateClientKey(bearer)
 		if !staticValid && !clientValid {
 			writeError(w, http.StatusUnauthorized, "proxy_auth_required", "missing or invalid proxy client API key")
 			return
@@ -827,12 +894,16 @@ func (server *proxyServer) handleHealth(w http.ResponseWriter, r *http.Request) 
 	if !present && server.cfg.Profile != "generic" && server.cfg.UpstreamProtocol != protocolGenAI {
 		status = "degraded"
 	}
+	poolStatus := server.keys.status()
+	if poolStatus.Error != "" && poolStatus.Error != "key store is locked" {
+		poolStatus.Error = "key store error"
+	}
 	payload := map[string]any{
 		"status": status, "upstream": server.cfg.UpstreamURL.String(),
 		"spoof_profile": server.cfg.Profile, "waf_cookie": present,
 		"waf_cookie_names": names, "force_sequential_tools": server.cfg.ForceSequentialTools,
 		"stateless_responses": server.cfg.StatelessResponses,
-		"key_pool":            server.keys.status(), "key_selection_mode": server.currentKeySelectionMode(),
+		"key_pool":            poolStatus, "key_selection_mode": server.currentKeySelectionMode(),
 		"infrastructure": server.infra.health(),
 	}
 	if !updated.IsZero() {
@@ -924,7 +995,11 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 		return
 	}
 	stream, _ := obj["stream"].(bool)
-	cacheKey, cacheTTL, cacheable := server.cache.isCacheable(r, body, obj)
+	cacheScope, authAvailable := server.resolveCacheAuthScope(r, model, "/v1/chat/completions")
+	cacheKey, cacheTTL, cacheable := "", time.Duration(0), false
+	if authAvailable {
+		cacheKey, cacheTTL, cacheable = server.cache.isCacheableScoped(r, body, obj, cacheScope)
+	}
 	if cacheable {
 		if cachedBody, hit := server.cache.get(r.Context(), cacheKey); hit {
 			w.Header().Set("Content-Type", "application/json")
@@ -1051,7 +1126,7 @@ func (server *proxyServer) handlePassthrough(w http.ResponseWriter, r *http.Requ
 	}
 	var body []byte
 	var err error
-	if r.Method != http.MethodGet && r.Method != http.MethodDelete && r.Body != nil {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodDelete && r.Body != nil {
 		body, err = readRequestBody(w, r, server.cfg.MaxBodyBytes)
 		if err != nil {
 			return
@@ -1061,7 +1136,8 @@ func (server *proxyServer) handlePassthrough(w http.ResponseWriter, r *http.Requ
 	if r.URL.RawQuery != "" {
 		path += "?" + r.URL.RawQuery
 	}
-	resp, err := server.doUpstream(r.Context(), r.Header, r.Method, path, body, false)
+	stream := streamFromRequestBody(body)
+	resp, err := server.doUpstream(r.Context(), r.Header, r.Method, path, body, stream)
 	if err != nil {
 		writeUpstreamError(w, err)
 		return
@@ -1070,6 +1146,8 @@ func (server *proxyServer) handlePassthrough(w http.ResponseWriter, r *http.Requ
 	copyResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	if isEventStream(resp.Header) {
+		server.metrics.activeSSE.Add(1)
+		defer server.metrics.activeSSE.Add(-1)
 		streamCopy(w, resp.Body)
 		return
 	}
@@ -1135,10 +1213,8 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 	// Bound failover even if administrators add keys during this request.
 	remainingFailovers := max(0, server.keys.status().Total-1)
 	model := modelFromRequestBody(body)
-	requiredProtocol := ""
-	if path == "/v1/responses" {
-		requiredProtocol = protocolResponses
-	}
+	pathOnly, _, _ := strings.Cut(path, "?")
+	requiredProtocol := pathOnly
 	inboundAuth := inbound.Get("Authorization")
 	if inboundAuth == "" && inbound.Get("X-Api-Key") != "" {
 		inboundAuth = "Bearer " + inbound.Get("X-Api-Key")
@@ -1147,7 +1223,7 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 		inboundAuth = ""
 	}
 	authHeader, selectedKey, err := server.selectAuthorizationFor(inboundAuth, excludedKeys, model, requiredProtocol)
-	if errors.Is(err, errNoEnabledAPIKeys) && requiredProtocol != "" {
+	if errors.Is(err, errNoEnabledAPIKeys) && (pathOnly == "/v1/responses" || server.keys.hasProtocolBlockedKey(excludedKeys, model, requiredProtocol)) {
 		err = errNoCompatibleUpstream
 	}
 	if client, _ := ctx.Value(gatewayClientContextKey{}).(bool); client && selectedKey == nil && err == nil {
@@ -1175,12 +1251,14 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 			return nil, nil, routeErr
 		}
 		attemptCtx, cancel := context.WithCancel(ctx)
+		var oobUsage *outOfBandUsage
+		attemptCtx, oobUsage = withOutOfBandUsage(attemptCtx)
 		var resp *http.Response
 		var err error
 		if protocol == protocolGenAI {
 			safePath, _, _ := strings.Cut(attemptPath, "?")
 			record.attempt(map[string]any{"upstream_path": safePath})
-			if attemptPath == "/v1/models" || attemptPath == "/models" {
+			if safePath == "/v1/models" || safePath == "/models" {
 				resp, err = server.handleGenAIModels(attemptCtx, route, baseURL, selectedKey)
 			} else {
 				resp, err = server.executeGenAI(attemptCtx, route, baseURL, selectedKey, model, attemptBody, stream)
@@ -1232,6 +1310,9 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 		}
 		if err != nil {
 			cancel()
+			if errors.Is(err, errInvalidUpstreamRequest) {
+				return nil, nil, err
+			}
 			if selectedKey != nil && selectedKey.NetworkProxy != nil {
 				server.keys.recordProxyProbe(selectedKey.NetworkProxy.ID, false)
 			}
@@ -1354,7 +1435,7 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				keyID := selectedKey.ID
 				release := server.infra.acquireKey(ctx, keyID)
-				resp.Body = newUsageTrackingBody(resp.Body, func(input, output uint64) {
+				resp.Body = newUsageTrackingBodyWithFallback(resp.Body, oobUsage, func(input, output uint64) {
 					server.keys.recordUsage(keyID, input, output)
 					record.set(map[string]any{"input_tokens": input, "output_tokens": output})
 				})
@@ -1366,8 +1447,50 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 	}
 }
 
+func (server *proxyServer) resolveCacheAuthScope(r *http.Request, model, pathFilter string) (string, bool) {
+	inbound := r.Header.Get("Authorization")
+	if inbound == "" && r.Header.Get("X-Api-Key") != "" {
+		inbound = "Bearer " + r.Header.Get("X-Api-Key")
+	}
+	isGatewayClient, _ := r.Context().Value(gatewayClientContextKey{}).(bool)
+	if isGatewayClient {
+		inbound = ""
+	}
+	inboundCompatible := protocolFilterMatches(server.cfg.UpstreamProtocol, pathFilter) && !server.keys.networkPoolConfigured() && !server.keys.modelManaged(model)
+	inboundScope := func(token string) string {
+		sum := sha256.Sum256([]byte(token))
+		return "inbound:" + hex.EncodeToString(sum[:])
+	}
+	switch server.currentKeySelectionMode() {
+	case "pool-only":
+		if server.keys.hasCompatibleKey(model, pathFilter) {
+			return "pool", true
+		}
+		return "", false
+	case "pool-first":
+		if server.keys.hasCompatibleKey(model, pathFilter) {
+			return "pool", true
+		}
+		if inbound != "" && inboundCompatible {
+			return inboundScope(inbound), true
+		}
+		return "", false
+	default:
+		if inbound != "" && inboundCompatible {
+			return inboundScope(inbound), true
+		}
+		if server.keys.hasCompatibleKey(model, pathFilter) {
+			return "pool", true
+		}
+		if !isGatewayClient && server.keys.status().Total == 0 && inboundCompatible {
+			return "anon", true
+		}
+		return "", false
+	}
+}
+
 func (server *proxyServer) selectAuthorizationFor(inbound string, excluded map[string]bool, model, requiredProtocol string) (string, *selectedAPIKey, error) {
-	inboundCompatible := (requiredProtocol == "" || effectiveProtocol(server.cfg.UpstreamProtocol) == requiredProtocol) && !server.keys.networkPoolConfigured() && !server.keys.modelManaged(model)
+	inboundCompatible := protocolFilterMatches(server.cfg.UpstreamProtocol, requiredProtocol) && !server.keys.networkPoolConfigured() && !server.keys.modelManaged(model)
 	switch server.currentKeySelectionMode() {
 	case "pool-only":
 		return server.selectPoolAuthorizationFor(excluded, model, requiredProtocol)
@@ -1413,6 +1536,17 @@ func modelFromRequestBody(body []byte) string {
 	}
 	_ = json.Unmarshal(body, &request)
 	return request.Model
+}
+
+func streamFromRequestBody(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	var request struct {
+		Stream bool `json:"stream"`
+	}
+	_ = json.Unmarshal(body, &request)
+	return request.Stream
 }
 
 func sleepContext(ctx context.Context, duration time.Duration) bool {
@@ -1557,7 +1691,9 @@ func Run() {
 			os.Exit(1)
 		}
 		proxy.keys.setSaveHook(func(payload []byte) error {
-			return infra.saveGatewayState(context.Background(), payload)
+			saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			return infra.saveGatewayState(saveCtx, payload)
 		})
 	}
 	go func() {

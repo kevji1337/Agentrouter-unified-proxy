@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"sync"
@@ -19,7 +20,11 @@ import (
 type infrastructure struct {
 	db             *sql.DB
 	redis          *redis.Client
+	httpClient     *http.Client
 	events         chan map[string]any
+	stopCh         chan struct{}
+	closeOnce      sync.Once
+	wg             sync.WaitGroup
 	telegramToken  string
 	telegramChatID string
 	alertCooldown  time.Duration
@@ -29,9 +34,13 @@ type infrastructure struct {
 
 func newInfrastructure(ctx context.Context, cfg config) (*infrastructure, error) {
 	infra := &infrastructure{
-		events: make(chan map[string]any, 512), telegramToken: cfg.TelegramBotToken,
-		telegramChatID: cfg.TelegramChatID, alertCooldown: cfg.AlertCooldown,
-		lastAlerts: make(map[string]time.Time),
+		events:         make(chan map[string]any, 512),
+		stopCh:         make(chan struct{}),
+		httpClient:     &http.Client{Timeout: 10 * time.Second},
+		telegramToken:  cfg.TelegramBotToken,
+		telegramChatID: cfg.TelegramChatID,
+		alertCooldown:  cfg.AlertCooldown,
+		lastAlerts:     make(map[string]time.Time),
 	}
 	if cfg.DatabaseURL != "" {
 		db, err := sql.Open("pgx", cfg.DatabaseURL)
@@ -40,6 +49,8 @@ func newInfrastructure(ctx context.Context, cfg config) (*infrastructure, error)
 		}
 		db.SetMaxOpenConns(10)
 		db.SetMaxIdleConns(3)
+		db.SetConnMaxLifetime(30 * time.Minute)
+		db.SetConnMaxIdleTime(5 * time.Minute)
 		probe, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		if err := db.PingContext(probe); err != nil {
@@ -47,7 +58,9 @@ func newInfrastructure(ctx context.Context, cfg config) (*infrastructure, error)
 			return nil, fmt.Errorf("postgres ping: %w", err)
 		}
 		infra.db = db
-		if err := infra.migrate(ctx); err != nil {
+		migrateCtx, migrateCancel := context.WithTimeout(ctx, 30*time.Second)
+		defer migrateCancel()
+		if err := infra.migrate(migrateCtx); err != nil {
 			_ = db.Close()
 			return nil, err
 		}
@@ -57,18 +70,24 @@ func newInfrastructure(ctx context.Context, cfg config) (*infrastructure, error)
 	if cfg.RedisURL != "" {
 		options, err := redis.ParseURL(cfg.RedisURL)
 		if err != nil {
-			infra.Close()
+			if infra.db != nil {
+				_ = infra.db.Close()
+			}
 			return nil, fmt.Errorf("parse REDIS_URL: %w", err)
 		}
 		infra.redis = redis.NewClient(options)
 		probe, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		if err := infra.redis.Ping(probe).Err(); err != nil {
-			infra.Close()
+			_ = infra.redis.Close()
+			if infra.db != nil {
+				_ = infra.db.Close()
+			}
 			return nil, fmt.Errorf("redis ping: %w", err)
 		}
 	}
-	go infra.eventWorker(ctx)
+	infra.wg.Add(2)
+	go infra.eventWorker()
 	go infra.monitor(ctx)
 	setPersistentLogSink(func(record map[string]any) {
 		clone := make(map[string]any, len(record))
@@ -87,12 +106,22 @@ func (infra *infrastructure) Close() {
 	if infra == nil {
 		return
 	}
-	if infra.redis != nil {
-		_ = infra.redis.Close()
-	}
-	if infra.db != nil {
-		_ = infra.db.Close()
-	}
+	infra.closeOnce.Do(func() {
+		setPersistentLogSink(nil)
+		if infra.stopCh != nil {
+			close(infra.stopCh)
+		}
+		infra.wg.Wait()
+		if infra.httpClient != nil {
+			infra.httpClient.CloseIdleConnections()
+		}
+		if infra.redis != nil {
+			_ = infra.redis.Close()
+		}
+		if infra.db != nil {
+			_ = infra.db.Close()
+		}
+	})
 }
 
 func (infra *infrastructure) migrate(ctx context.Context) error {
@@ -127,14 +156,26 @@ func (infra *infrastructure) saveGatewayState(ctx context.Context, payload []byt
 	return err
 }
 
-func (infra *infrastructure) eventWorker(ctx context.Context) {
+func (infra *infrastructure) eventWorker() {
+	defer infra.wg.Done()
+	baseCtx := context.Background()
 	for {
 		select {
-		case <-ctx.Done():
-			return
+		case <-infra.stopCh:
+			drainCtx, cancel := context.WithTimeout(baseCtx, 5*time.Second)
+			defer cancel()
+			for {
+				select {
+				case event := <-infra.events:
+					infra.persistEvent(drainCtx, event)
+					infra.maybeAlert(drainCtx, event)
+				default:
+					return
+				}
+			}
 		case event := <-infra.events:
-			infra.persistEvent(ctx, event)
-			infra.maybeAlert(ctx, event)
+			infra.persistEvent(baseCtx, event)
+			infra.maybeAlert(baseCtx, event)
 		}
 	}
 }
@@ -175,21 +216,33 @@ func (infra *infrastructure) maybeAlert(ctx context.Context, event map[string]an
 		text += "\nRequest: " + fmt.Sprint(requestID)
 	}
 	payload, _ := json.Marshal(map[string]any{"chat_id": infra.telegramChatID, "text": text, "disable_web_page_preview": true})
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.telegram.org/bot"+infra.telegramToken+"/sendMessage", bytes.NewReader(payload))
+	alertCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(alertCtx, http.MethodPost, "https://api.telegram.org/bot"+infra.telegramToken+"/sendMessage", bytes.NewReader(payload))
+	if err != nil {
+		return
+	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := infra.httpClient
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
 	resp, err := client.Do(req)
 	if err == nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 		_ = resp.Body.Close()
 	}
 }
 
 func (infra *infrastructure) monitor(ctx context.Context) {
+	defer infra.wg.Done()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-infra.stopCh:
 			return
 		case <-ticker.C:
 			if infra.db != nil {

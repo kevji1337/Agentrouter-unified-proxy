@@ -1288,6 +1288,74 @@
         }
       }
     },
+    "/api/admin/keys/probe": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "post": {
+        "security": [
+          {
+            "adminSession": []
+          },
+          {
+            "adminCookie": []
+          }
+        ],
+        "summary": "Probe all enabled keys in the pool (admin role)",
+        "responses": {
+          "200": {
+            "description": "Aggregate probe statistics (checked, accepted, failed, inconclusive, duration_ms)"
+          },
+          "403": {
+            "description": "Admin role required"
+          }
+        }
+      }
+    },
+    "/api/admin/cache": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "get": {
+        "security": [
+          {
+            "adminSession": []
+          },
+          {
+            "adminCookie": []
+          }
+        ],
+        "summary": "Inspect response cache statistics",
+        "responses": {
+          "200": {
+            "description": "Cache status, backend, item count, hits, misses, and default_ttl"
+          }
+        }
+      },
+      "delete": {
+        "security": [
+          {
+            "adminSession": []
+          },
+          {
+            "adminCookie": []
+          }
+        ],
+        "summary": "Clear all cached responses (admin role)",
+        "responses": {
+          "200": {
+            "description": "Cache cleared"
+          },
+          "403": {
+            "description": "Admin role required"
+          }
+        }
+      }
+    },
     "/api/admin/logout": {
       "servers": [
         {

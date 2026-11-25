@@ -44,6 +44,8 @@ type persistedClientKey struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 	Uses       uint64    `json:"uses,omitempty"`
 	LastUsed   time.Time `json:"last_used,omitempty"`
+	digest     [32]byte
+	hasDigest  bool
 }
 
 type clientKeyView struct {
@@ -244,10 +246,13 @@ func (store *apiKeyStore) load() error {
 			return fmt.Errorf("decrypt key %q: check KEY_STORE_SECRET: %w", file.Keys[i].Name, err)
 		}
 	}
-	for _, clientKey := range file.ClientKeys {
-		if _, err := store.decryptClientKey(clientKey); err != nil {
-			return fmt.Errorf("decrypt client key %q: check KEY_STORE_SECRET: %w", clientKey.Name, err)
+	for i := range file.ClientKeys {
+		plain, err := store.decryptClientKey(file.ClientKeys[i])
+		if err != nil {
+			return fmt.Errorf("decrypt client key %q: check KEY_STORE_SECRET: %w", file.ClientKeys[i].Name, err)
 		}
+		file.ClientKeys[i].digest = sha256.Sum256([]byte(plain))
+		file.ClientKeys[i].hasDigest = true
 	}
 	store.adminPasswords = file.AdminPasswords
 	store.savedAdminSessions = file.AdminSessions
@@ -699,7 +704,7 @@ func (store *apiKeyStore) selectNextCompatible(excluded map[string]bool, model s
 	record.DailyRequests++
 	record.LastUsed = now
 	if err := store.saveLocked(); err != nil {
-		return nil, err
+		logEvent("warn", "key_store_telemetry_save_failed", map[string]any{"error": err.Error()})
 	}
 	return store.selectedKeyLocked(*record, plain)
 }
@@ -738,17 +743,22 @@ func (store *apiKeyStore) recordResult(id string, status int, message string, co
 	if index < 0 {
 		return
 	}
+	changed := false
 	if status >= 400 {
 		store.keys[index].Failures++
 		store.keys[index].LastError = message
 		if cooldown > 0 && (status == http.StatusUnauthorized || status == http.StatusPaymentRequired || status == http.StatusTooManyRequests) {
 			store.keys[index].CooldownUntil = time.Now().UTC().Add(cooldown)
 		}
-	} else {
+		changed = true
+	} else if store.keys[index].LastError != "" || !store.keys[index].CooldownUntil.IsZero() {
 		store.keys[index].LastError = ""
 		store.keys[index].CooldownUntil = time.Time{}
+		changed = true
 	}
-	_ = store.saveLocked()
+	if changed {
+		_ = store.saveLocked()
+	}
 }
 
 func (store *apiKeyStore) recordUsage(id string, inputTokens, outputTokens uint64) {
@@ -869,10 +879,13 @@ func (store *apiKeyStore) importState(raw []byte, restoreSessions bool) error {
 			return fmt.Errorf("backup cannot be decrypted with current KEY_STORE_SECRET: %w", err)
 		}
 	}
-	for _, clientKey := range file.ClientKeys {
-		if _, err := store.decryptClientKey(clientKey); err != nil {
+	for i := range file.ClientKeys {
+		plain, err := store.decryptClientKey(file.ClientKeys[i])
+		if err != nil {
 			return fmt.Errorf("backup client key cannot be decrypted with current KEY_STORE_SECRET: %w", err)
 		}
+		file.ClientKeys[i].digest = sha256.Sum256([]byte(plain))
+		file.ClientKeys[i].hasDigest = true
 	}
 	oldPasswords, oldSessions := store.adminPasswords, store.savedAdminSessions
 	old := store.keys
@@ -952,7 +965,11 @@ func (store *apiKeyStore) createClientKey(name string) (clientKeyView, string, e
 		return clientKeyView{}, "", err
 	}
 	now := time.Now().UTC()
-	record := persistedClientKey{ID: "client_" + randomKeyID()[4:], Name: name, Enabled: true, Mask: maskAPIKey(plain), Nonce: nonce, Ciphertext: ciphertext, CreatedAt: now, UpdatedAt: now}
+	record := persistedClientKey{
+		ID: "client_" + randomKeyID()[4:], Name: name, Enabled: true, Mask: maskAPIKey(plain),
+		Nonce: nonce, Ciphertext: ciphertext, CreatedAt: now, UpdatedAt: now,
+		digest: sha256.Sum256([]byte(plain)), hasDigest: true,
+	}
 	store.clientKeys = append(store.clientKeys, record)
 	if err := store.saveLocked(); err != nil {
 		store.clientKeys = store.clientKeys[:len(store.clientKeys)-1]
@@ -1027,18 +1044,27 @@ func (store *apiKeyStore) deleteClientKey(id string) error {
 }
 
 func (store *apiKeyStore) authenticateClientKey(plain string) (string, bool) {
+	if plain == "" {
+		return "", false
+	}
+	providedDigest := sha256.Sum256([]byte(plain))
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	matched := -1
-	for i, record := range store.clientKeys {
+	for i := range store.clientKeys {
+		record := &store.clientKeys[i]
 		if !record.Enabled {
 			continue
 		}
-		candidate, err := store.decryptClientKey(record)
-		if err != nil || len(candidate) != len(plain) {
-			continue
+		if !record.hasDigest {
+			candidate, err := store.decryptClientKey(*record)
+			if err != nil {
+				continue
+			}
+			record.digest = sha256.Sum256([]byte(candidate))
+			record.hasDigest = true
 		}
-		if subtle.ConstantTimeCompare([]byte(candidate), []byte(plain)) == 1 {
+		if subtle.ConstantTimeCompare(record.digest[:], providedDigest[:]) == 1 && matched < 0 {
 			matched = i
 		}
 	}
@@ -1046,9 +1072,13 @@ func (store *apiKeyStore) authenticateClientKey(plain string) (string, bool) {
 		return "", false
 	}
 	record := &store.clientKeys[matched]
+	prevLastUsed := record.LastUsed
+	now := time.Now().UTC()
 	record.Uses++
-	record.LastUsed = time.Now().UTC()
-	_ = store.saveLocked()
+	record.LastUsed = now
+	if prevLastUsed.IsZero() || now.Sub(prevLastUsed) >= 5*time.Second {
+		_ = store.saveLocked()
+	}
 	return record.ID, true
 }
 

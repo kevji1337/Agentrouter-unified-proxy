@@ -37,15 +37,27 @@ func parseAdminAccounts(raw, legacyToken string) ([]adminAccount, error) {
 			return nil, fmt.Errorf("ADMIN_ACCOUNTS_JSON: %w", err)
 		}
 	}
-	if legacyToken != "" {
+	hasOwner := false
+	for i := range accounts {
+		if strings.TrimSpace(accounts[i].Name) == "owner" {
+			hasOwner = true
+			break
+		}
+	}
+	if legacyToken != "" && !hasOwner {
 		accounts = append(accounts, adminAccount{Name: "owner", Token: legacyToken, Role: "admin"})
 	}
+	seenNames := make(map[string]bool, len(accounts))
 	for i := range accounts {
 		accounts[i].Name = strings.TrimSpace(accounts[i].Name)
 		accounts[i].Role = strings.ToLower(strings.TrimSpace(accounts[i].Role))
 		if accounts[i].Name == "" || len(accounts[i].Token) < 16 || (accounts[i].Role != "admin" && accounts[i].Role != "viewer") {
 			return nil, fmt.Errorf("ADMIN_ACCOUNTS_JSON account %d requires name, token >=16 chars, and role admin/viewer", i)
 		}
+		if seenNames[accounts[i].Name] {
+			return nil, fmt.Errorf("ADMIN_ACCOUNTS_JSON contains duplicate account %q", accounts[i].Name)
+		}
+		seenNames[accounts[i].Name] = true
 	}
 	return accounts, nil
 }
@@ -77,6 +89,10 @@ func (server *proxyServer) authenticateAdmin(r *http.Request) (*adminAccount, er
 		}
 		server.adminMu.Lock()
 		session, ok := server.adminSessions[sessionID]
+		if ok && !time.Now().Before(session.Expires) {
+			delete(server.adminSessions, sessionID)
+			ok = false
+		}
 		server.adminMu.Unlock()
 		if ok {
 			if account := server.accountForSession(session); account != nil {
@@ -100,7 +116,7 @@ func (server *proxyServer) authenticateAdminCredentials(name, password, token, t
 	if token != "" {
 		for i := range server.cfg.AdminAccounts {
 			account := &server.cfg.AdminAccounts[i]
-			if len(token) == len(account.Token) && subtle.ConstantTimeCompare([]byte(token), []byte(account.Token)) == 1 {
+			if len(token) == len(account.Token) && subtle.ConstantTimeCompare([]byte(token), []byte(account.Token)) == 1 && matched == nil {
 				matched = account
 			}
 		}
@@ -136,10 +152,30 @@ func (server *proxyServer) authenticateAdminCredentials(name, password, token, t
 
 func (server *proxyServer) createAdminSession(account *adminAccount) (string, time.Time) {
 	id := newRequestID() + newRequestID()
-	expires := time.Now().UTC().Add(12 * time.Hour)
+	now := time.Now().UTC()
+	expires := now.Add(12 * time.Hour)
 	password, _ := server.keys.adminPassword(account)
 	session := adminSession{Account: *account, Expires: expires, PasswordVersion: password.Hash}
 	server.adminMu.Lock()
+	for existingID, existing := range server.adminSessions {
+		if !now.Before(existing.Expires) {
+			delete(server.adminSessions, existingID)
+		}
+	}
+	for len(server.adminSessions) >= maxSavedAdminSessions {
+		oldestID := ""
+		var oldestExpires time.Time
+		for existingID, existing := range server.adminSessions {
+			if oldestID == "" || existing.Expires.Before(oldestExpires) {
+				oldestID = existingID
+				oldestExpires = existing.Expires
+			}
+		}
+		if oldestID == "" {
+			break
+		}
+		delete(server.adminSessions, oldestID)
+	}
 	server.adminSessions[id] = session
 	server.adminMu.Unlock()
 	server.infra.saveAdminSession(context.Background(), id, session)

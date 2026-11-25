@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -19,25 +20,40 @@ func New(baseURL, apiKey string) *Client {
 }
 
 func (c *Client) Request(ctx context.Context, method, path string, input, output any) error {
-	var body bytes.Buffer
+	var bodyReader io.Reader
 	if input != nil {
+		var body bytes.Buffer
 		if err := json.NewEncoder(&body).Encode(input); err != nil {
 			return err
 		}
+		bodyReader = &body
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, &body)
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, bodyReader)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.HTTP.Do(req)
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+	if input != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	httpClient := c.HTTP
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 		return fmt.Errorf("agentrouter HTTP %d", resp.StatusCode)
+	}
+	if output == nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(output)
 }

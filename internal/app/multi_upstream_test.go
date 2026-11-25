@@ -26,7 +26,7 @@ func multiUpstreamProxy(t *testing.T, base string) *proxyServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newProxyServer(config{UpstreamURL: parsed, Profile: "claude-code", KeySelectionMode: "pool-only", KeyFailover: true, KeyCooldown: time.Minute, KeyStoreSecret: "multi-upstream-test-secret", KeyStorePath: filepath.Join(t.TempDir(), "keys.json"), ForceSequentialTools: true})
+	return newProxyServer(config{UpstreamURL: parsed, Profile: "claude-code", KeySelectionMode: "pool-only", KeyFailover: true, KeyCooldown: time.Minute, KeyStoreSecret: "multi-upstream-test-secret", KeyStorePath: filepath.Join(t.TempDir(), "keys.json"), ForceSequentialTools: true, ResponseCache: true})
 }
 
 func addUpstream(t *testing.T, proxy *proxyServer, name, base, protocol, key string, priority int, models ...string) apiKeyView {
