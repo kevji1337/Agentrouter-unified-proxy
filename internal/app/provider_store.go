@@ -40,8 +40,8 @@ func validateProvider(p apiProvider) error {
 	if strings.TrimSpace(p.Name) == "" || len(p.Name) > 80 {
 		return errors.New("provider name must contain 1 to 80 characters")
 	}
-	if p.BaseURL == "" && effectiveProtocol(p.APIProtocol) == protocolGenAI {
-		p.BaseURL = DefaultGenAIBaseURL
+	if p.BaseURL == "" {
+		p.BaseURL = defaultBaseURLForProtocol(p.APIProtocol)
 	}
 	if p.BaseURL == "" {
 		return errors.New("provider base_url is required")
@@ -104,8 +104,8 @@ func (store *apiKeyStore) saveProvider(id string, input providerInput) (provider
 	record.Name = strings.TrimSpace(input.Name)
 	record.BaseURL = strings.TrimRight(strings.TrimSpace(input.BaseURL), "/")
 	record.APIProtocol = effectiveProtocol(input.APIProtocol)
-	if record.APIProtocol == protocolGenAI && record.BaseURL == "" {
-		record.BaseURL = DefaultGenAIBaseURL
+	if record.BaseURL == "" {
+		record.BaseURL = defaultBaseURLForProtocol(record.APIProtocol)
 	}
 	record.SpoofProfile = strings.ToLower(strings.TrimSpace(input.SpoofProfile))
 	record.Models = normalizeModels(input.Models)

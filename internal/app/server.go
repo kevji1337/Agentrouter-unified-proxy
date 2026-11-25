@@ -30,42 +30,45 @@ import (
 const maxRequestBytes = 20 << 20
 
 type config struct {
-	UpstreamURL            *url.URL
-	UpstreamProtocol       string
-	AllowedUpstreamOrigins []string
-	RetryUnsafeRequests    bool
-	ListenAddress          string
-	Port                   int
-	Profile                string
-	ProxyAuthToken         string
-	ResponseHeaderTimeout  time.Duration
-	SSEIdleTimeout         time.Duration
-	WarmupInterval         time.Duration
-	RetryDelay             time.Duration
-	MaxRetries             int
-	RetryOn5xx             bool
-	MaxBodyBytes           int64
-	ForceSequentialTools   bool
-	StatelessResponses     bool
-	AdminToken             string
-	AdminAccounts          []adminAccount
-	KeyStorePath           string
-	KeyStoreSecret         string
-	KeySelectionMode       string
-	KeyFailover            bool
-	KeyCooldown            time.Duration
-	KeyHealthInterval      time.Duration
-	KeyRecoveryInterval    time.Duration
-	ResponseCache          bool
-	ResponseCacheTTL       time.Duration
-	ResponseCacheMaxItems  int
-	ResponseCacheAll       bool
-	DatabaseURL            string
-	RedisURL               string
-	StorageBackend         string
-	TelegramBotToken       string
-	TelegramChatID         string
-	AlertCooldown          time.Duration
+	UpstreamURL             *url.URL
+	UpstreamProtocol        string
+	AllowedUpstreamOrigins  []string
+	RetryUnsafeRequests     bool
+	ListenAddress           string
+	Port                    int
+	Profile                 string
+	ProxyAuthToken          string
+	ResponseHeaderTimeout   time.Duration
+	SSEIdleTimeout          time.Duration
+	WarmupInterval          time.Duration
+	RetryDelay              time.Duration
+	MaxRetries              int
+	RetryOn5xx              bool
+	MaxBodyBytes            int64
+	ForceSequentialTools    bool
+	StatelessResponses      bool
+	AdminToken              string
+	AdminAccounts           []adminAccount
+	KeyStorePath            string
+	KeyStoreSecret          string
+	KeySelectionMode        string
+	KeyFailover             bool
+	KeyCooldown             time.Duration
+	KeyHealthInterval       time.Duration
+	KeyRecoveryInterval     time.Duration
+	ResponseCache           bool
+	ResponseCacheTTL        time.Duration
+	ResponseCacheMaxItems   int
+	ResponseCacheAll        bool
+	DatabaseURL             string
+	RedisURL                string
+	StorageBackend          string
+	BlockPrivateUpstreamIPs bool
+	AuditRetentionDays      int
+	StateSyncInterval       time.Duration
+	TelegramBotToken        string
+	TelegramChatID          string
+	AlertCooldown           time.Duration
 }
 
 func loadConfig() (config, error) {
@@ -74,11 +77,11 @@ func loadConfig() (config, error) {
 	}
 	upstreamProtocol := envDefault("UPSTREAM_API_PROTOCOL", protocolResponses)
 	if !validProtocol(upstreamProtocol) {
-		return config{}, errors.New("UPSTREAM_API_PROTOCOL must be responses, chat-completions, or genai")
+		return config{}, errors.New("UPSTREAM_API_PROTOCOL must be responses, chat-completions, genai, or anthropic")
 	}
 	defaultUpstreamURL := "https://agentrouter.org"
-	if upstreamProtocol == protocolGenAI {
-		defaultUpstreamURL = DefaultGenAIBaseURL
+	if protoDefault := defaultBaseURLForProtocol(upstreamProtocol); protoDefault != "" {
+		defaultUpstreamURL = protoDefault
 	}
 	rawURL := envDefault("UPSTREAM_URL", defaultUpstreamURL)
 	upstream, err := parseUpstreamURL(rawURL)
@@ -190,6 +193,18 @@ func loadConfig() (config, error) {
 	if storageBackend != "file" && storageBackend != "postgres" {
 		return config{}, fmt.Errorf("STORAGE_BACKEND must be file or postgres")
 	}
+	blockPrivateIPs, err := strconv.ParseBool(envDefault("BLOCK_PRIVATE_UPSTREAM_IPS", "false"))
+	if err != nil {
+		return config{}, fmt.Errorf("BLOCK_PRIVATE_UPSTREAM_IPS must be true or false")
+	}
+	auditRetentionDays, err := envInt("AUDIT_RETENTION_DAYS", 30, 0, 3650)
+	if err != nil {
+		return config{}, err
+	}
+	stateSyncInterval, err := envDuration("STATE_SYNC_INTERVAL", 5*time.Second)
+	if err != nil {
+		return config{}, err
+	}
 	adminToken := strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
 	adminAccounts, err := parseAdminAccounts(os.Getenv("ADMIN_ACCOUNTS_JSON"), adminToken)
 	if err != nil {
@@ -217,8 +232,12 @@ func loadConfig() (config, error) {
 		ResponseCacheMaxItems: responseCacheMaxItems,
 		ResponseCacheAll:      responseCacheAll,
 		DatabaseURL:           strings.TrimSpace(os.Getenv("DATABASE_URL")), RedisURL: strings.TrimSpace(os.Getenv("REDIS_URL")),
-		StorageBackend: storageBackend, TelegramBotToken: strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
-		TelegramChatID: strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")), AlertCooldown: alertCooldown,
+		StorageBackend:          storageBackend,
+		BlockPrivateUpstreamIPs: blockPrivateIPs,
+		AuditRetentionDays:      auditRetentionDays,
+		StateSyncInterval:       stateSyncInterval,
+		TelegramBotToken:        strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
+		TelegramChatID:          strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")), AlertCooldown: alertCooldown,
 	}, nil
 }
 
@@ -515,6 +534,10 @@ func newProxyServer(cfg config) *proxyServer {
 		adminSessions: make(map[string]adminSession),
 		outbound:      newOutboundRoutes(transport),
 	}
+	transport.DialContext = server.newSafeDialContext(&net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}, nil)
 	server.routingMode.Store(cfg.KeySelectionMode)
 	if savedMode := server.keys.savedSelectionMode(); validKeySelectionMode(savedMode) {
 		server.routingMode.Store(savedMode)
@@ -730,6 +753,28 @@ func (server *proxyServer) upstreamURLFor(base *url.URL, path string) string {
 	return target.String()
 }
 
+func (server *proxyServer) applySyncedState(payload []byte, revision uint64) error {
+	mode, applied, err := server.keys.applyRemoteState(payload, revision)
+	if err != nil {
+		return err
+	}
+	if applied {
+		if validKeySelectionMode(mode) {
+			server.routingMode.Store(mode)
+		}
+		server.resetOutboundRoutes()
+		logEvent("info", "gateway_state_synced", map[string]any{"revision": revision})
+	}
+	return nil
+}
+
+func (server *proxyServer) syncStateIfBehind(ctx context.Context) bool {
+	if server == nil || server.infra == nil || server.infra.db == nil {
+		return false
+	}
+	return server.infra.syncRemoteStateOnce(ctx, server.keys.revision, server.applySyncedState)
+}
+
 func (server *proxyServer) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/admin", server.handleAdminPage)
@@ -747,6 +792,8 @@ func (server *proxyServer) routes() http.Handler {
 	mux.HandleFunc("/models", server.handleModels)
 	mux.HandleFunc("/v1/chat/completions", server.handleChatCompletions)
 	mux.HandleFunc("/v1/responses", server.handleResponses)
+	mux.HandleFunc("/v1/messages", server.handleMessages)
+	mux.HandleFunc("/v1/messages/count_tokens", server.handleMessagesCountTokens)
 	for _, path := range []string{"/v1/completions", "/v1/embeddings", "/v1/moderations", "/v1/rerank", "/v1/files", "/v1/files/", "/v1/batches", "/v1/batches/", "/v1/images/", "/v1/audio/"} {
 		mux.HandleFunc(path, server.handlePassthrough)
 	}
@@ -763,7 +810,7 @@ func (server *proxyServer) routes() http.Handler {
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Api-Key, X-Proxy-Token, X-Request-ID, X-Admin-CSRF, X-Admin-Session")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Api-Key, X-Proxy-Token, X-Request-ID, X-Admin-CSRF, X-Admin-Session, Anthropic-Version, Anthropic-Beta, Anthropic-Dangerous-Direct-Browser-Access")
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Max-Age", "86400")
 		if r.Method == http.MethodOptions {
@@ -789,16 +836,25 @@ func (server *proxyServer) authenticate(next http.Handler) http.Handler {
 		staticValid := server.cfg.ProxyAuthToken != "" && len(provided) == len(server.cfg.ProxyAuthToken) &&
 			subtle.ConstantTimeCompare([]byte(provided), []byte(server.cfg.ProxyAuthToken)) == 1
 		clientValid := false
-		if hasClientKeys {
-			bearer := ""
-			if authorization := r.Header.Get("Authorization"); strings.HasPrefix(strings.ToLower(authorization), "bearer ") {
-				bearer = strings.TrimSpace(authorization[7:])
+		bearer := ""
+		if authorization := r.Header.Get("Authorization"); strings.HasPrefix(strings.ToLower(authorization), "bearer ") {
+			bearer = strings.TrimSpace(authorization[7:])
+		} else if apiKey := strings.TrimSpace(r.Header.Get("X-Api-Key")); apiKey != "" {
+			bearer = apiKey
+		}
+		if bearer != "" {
+			if hasClientKeys {
+				_, clientValid = server.keys.authenticateClientKey(bearer)
 			}
-			if bearer != "" {
+			if !clientValid && server.syncStateIfBehind(r.Context()) && server.keys.hasEnabledClientKeys() {
 				_, clientValid = server.keys.authenticateClientKey(bearer)
 			}
 		}
 		if !staticValid && !clientValid {
+			if strings.HasPrefix(r.URL.Path, "/v1/messages") {
+				writeAnthropicError(w, http.StatusUnauthorized, "authentication_error", "missing or invalid proxy client API key")
+				return
+			}
 			writeError(w, http.StatusUnauthorized, "proxy_auth_required", "missing or invalid proxy client API key")
 			return
 		}
@@ -891,7 +947,7 @@ func (server *proxyServer) handleHealth(w http.ResponseWriter, r *http.Request) 
 	}
 	present, names, updated, warmup := server.wafStatus()
 	status := "ok"
-	if !present && server.cfg.Profile != "generic" && server.cfg.UpstreamProtocol != protocolGenAI {
+	if !present && server.cfg.Profile != "generic" && server.cfg.UpstreamProtocol != protocolGenAI && server.cfg.UpstreamProtocol != protocolAnthropic {
 		status = "degraded"
 	}
 	poolStatus := server.keys.status()
@@ -904,6 +960,7 @@ func (server *proxyServer) handleHealth(w http.ResponseWriter, r *http.Request) 
 		"waf_cookie_names": names, "force_sequential_tools": server.cfg.ForceSequentialTools,
 		"stateless_responses": server.cfg.StatelessResponses,
 		"key_pool":            poolStatus, "key_selection_mode": server.currentKeySelectionMode(),
+		"state_revision": server.keys.revision(),
 		"infrastructure": server.infra.health(),
 	}
 	if !updated.IsZero() {
@@ -1067,7 +1124,13 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 		server.metrics.activeSSE.Add(1)
 		defer server.metrics.activeSSE.Add(-1)
 		if isEventStream(resp.Header) {
-			if err := convertResponsesSSE(w, resp.Body, meta); err != nil {
+			var streamErr error
+			if meta.UpstreamFormat == "anthropic" {
+				streamErr = convertAnthropicSSEToChatSSE(w, resp.Body, meta)
+			} else {
+				streamErr = convertResponsesSSE(w, resp.Body, meta)
+			}
+			if streamErr != nil {
 				requestLogFromContext(r.Context()).responseError("conversion_error")
 				requestLogFromContext(r.Context()).set(map[string]any{"response_interrupted": true})
 				logRequestEvent(r.Context(), "error", "sse_conversion_failed", map[string]any{
@@ -1082,7 +1145,12 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 			writeError(w, http.StatusBadGateway, "upstream_error", "failed to read upstream response")
 			return
 		}
-		chat, err := convertResponsesResponse(raw, meta.Model)
+		var chat []byte
+		if meta.UpstreamFormat == "anthropic" {
+			chat, err = convertAnthropicResponseToChat(raw, meta.Model)
+		} else {
+			chat, err = convertResponsesResponse(raw, meta.Model)
+		}
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "conversion_error", "failed to convert upstream response")
 			return
@@ -1104,7 +1172,12 @@ func (server *proxyServer) handleChatCompletions(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadGateway, "upstream_error", "upstream response exceeds configured limit")
 		return
 	}
-	chat, err := convertResponsesResponse(raw, meta.Model)
+	var chat []byte
+	if meta.UpstreamFormat == "anthropic" {
+		chat, err = convertAnthropicResponseToChat(raw, meta.Model)
+	} else {
+		chat, err = convertResponsesResponse(raw, meta.Model)
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "conversion_error", "failed to convert upstream response")
 		return
@@ -1171,13 +1244,25 @@ func readRequestBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byt
 }
 
 func (server *proxyServer) warmup(ctx context.Context) bool {
-	if server.cfg.Profile == "generic" || server.keys.networkPoolConfigured() {
+	if server.cfg.Profile == "generic" || server.cfg.UpstreamProtocol == protocolGenAI || server.cfg.UpstreamProtocol == protocolAnthropic || server.keys.networkPoolConfigured() {
 		return false
 	}
 	if _, err := server.validateUpstreamURL(server.cfg.UpstreamURL.String()); err != nil {
 		return false
 	}
-	ok := server.cookies.warmup(ctx, server.cfg.UpstreamURL)
+	warmupTransport := &http.Transport{
+		DisableKeepAlives: true,
+		Proxy:             http.ProxyFromEnvironment,
+		DialContext:       server.newSafeDialContext(&net.Dialer{Timeout: 10 * time.Second}, nil),
+	}
+	warmupClient := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: warmupTransport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	ok := server.cookies.warmupWithClient(ctx, server.cfg.UpstreamURL, warmupClient)
 	if ok {
 		server.metrics.wafRefreshes.Add(1)
 	}
@@ -1291,11 +1376,31 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 				}
 				req.Header.Set("Accept", accept)
 			}
-			if authHeader != "" {
-				req.Header.Set("Authorization", authHeader)
-			}
-			if key := inbound.Get("X-Api-Key"); key != "" && selectedKey == nil {
-				req.Header.Set("X-Api-Key", key)
+			if protocol == protocolAnthropic {
+				version := inbound.Get("Anthropic-Version")
+				if version == "" {
+					version = DefaultAnthropicVersion
+				}
+				req.Header.Set("Anthropic-Version", version)
+				if beta := inbound.Get("Anthropic-Beta"); beta != "" {
+					req.Header.Set("Anthropic-Beta", beta)
+				}
+				if selectedKey != nil {
+					req.Header.Set("X-Api-Key", selectedKey.Key)
+				} else if key := inbound.Get("X-Api-Key"); key != "" {
+					req.Header.Set("X-Api-Key", key)
+				} else if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+					req.Header.Set("X-Api-Key", strings.TrimSpace(authHeader[7:]))
+				} else if authHeader != "" {
+					req.Header.Set("Authorization", authHeader)
+				}
+			} else {
+				if authHeader != "" {
+					req.Header.Set("Authorization", authHeader)
+				}
+				if key := inbound.Get("X-Api-Key"); key != "" && selectedKey == nil {
+					req.Header.Set("X-Api-Key", key)
+				}
 			}
 			if requestID := requestIDFromContext(ctx); requestID != "" {
 				req.Header.Set("X-Request-ID", requestID)
@@ -1722,27 +1827,47 @@ func Run() {
 	}
 
 	if cfg.StorageBackend == "postgres" {
-		state, stateErr := infra.loadGatewayState(rootCtx)
+		state, rev, stateErr := infra.loadGatewayStateWithRevision(rootCtx)
 		switch {
 		case stateErr == nil && len(state) > 0:
-			if err := proxy.keys.importState(state, true); err != nil {
+			if err := proxy.applySyncedState(state, rev); err != nil {
 				logEvent("error", "postgres_state_import_failed", map[string]any{"error": err.Error()})
 				os.Exit(1)
 			}
 		case errors.Is(stateErr, sql.ErrNoRows):
 			if state, exportErr := proxy.keys.exportBackup(); exportErr == nil {
-				_ = infra.saveGatewayState(rootCtx, state)
+				if initRev, casErr := infra.saveGatewayStateCAS(rootCtx, state, 0); casErr == nil {
+					_, _, _ = proxy.keys.applyRemoteState(state, initRev)
+				} else if errors.Is(casErr, errGatewayStateConflict) {
+					proxy.syncStateIfBehind(rootCtx)
+				}
 			}
 		case stateErr != nil:
 			logEvent("error", "postgres_state_load_failed", map[string]any{"error": stateErr.Error()})
 			os.Exit(1)
 		}
-		proxy.keys.setSaveHook(func(payload []byte) error {
+		proxy.keys.setVersionedSaveHook(func(payload []byte, expectedRev uint64) (uint64, error) {
 			saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			return infra.saveGatewayState(saveCtx, payload)
+			return infra.saveGatewayStateCAS(saveCtx, payload, expectedRev)
+		}, func() {
+			logEvent("warn", "gateway_state_conflict", nil)
+			proxy.syncStateIfBehind(context.Background())
 		})
+		infra.startStateSync(rootCtx, proxy.keys.revision, proxy.applySyncedState)
 	}
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-rootCtx.Done():
+				return
+			case <-ticker.C:
+				proxy.keys.flushTelemetry()
+			}
+		}
+	}()
 	go func() {
 		proxy.warmup(rootCtx)
 		ticker := time.NewTicker(cfg.WarmupInterval)
@@ -1780,6 +1905,7 @@ func Run() {
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
 			logEvent("error", "shutdown_error", map[string]any{"error": err.Error()})
 		}
+		proxy.keys.flushTelemetry()
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logEvent("error", "server_error", map[string]any{"error": err.Error()})

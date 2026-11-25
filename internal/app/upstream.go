@@ -1,7 +1,10 @@
 package app
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"net"
 	"net/netip"
 	"net/url"
 	"strconv"
@@ -12,12 +15,18 @@ const (
 	protocolResponses       = "responses"
 	protocolChatCompletions = "chat-completions"
 	protocolGenAI           = "genai"
+	protocolAnthropic       = "anthropic"
 
-	DefaultGenAIBaseURL = "https://generativelanguage.googleapis.com"
+	DefaultGenAIBaseURL     = "https://generativelanguage.googleapis.com"
+	DefaultAnthropicBaseURL = "https://api.anthropic.com"
+	DefaultAnthropicVersion = "2023-06-01"
 )
 
 var errNoCompatibleUpstream = errors.New("no available upstream supports the requested API protocol and model")
-var errInvalidUpstreamRequest = errors.New("request cannot be converted to Responses API")
+var errInvalidUpstreamRequest = errors.New("request cannot be converted to upstream API format")
+var errDNSRebindingBlocked = errors.New("upstream resolved to disallowed IP address")
+
+type ipLookupFunc func(ctx context.Context, network, host string) ([]netip.Addr, error)
 
 // An absent protocol preserves the behavior of existing v1/v2 stores.
 func effectiveProtocol(protocol string) string {
@@ -29,7 +38,7 @@ func effectiveProtocol(protocol string) string {
 
 func validProtocol(protocol string) bool {
 	p := effectiveProtocol(protocol)
-	return p == protocolResponses || p == protocolChatCompletions || p == protocolGenAI
+	return p == protocolResponses || p == protocolChatCompletions || p == protocolGenAI || p == protocolAnthropic
 }
 
 func parseUpstreamURL(raw string) (*url.URL, error) {
@@ -77,6 +86,131 @@ func isCloudMetadataAddr(addr netip.Addr) bool {
 	return addr == netip.MustParseAddr("100.100.100.200") || addr == netip.MustParseAddr("fd00:ec2::254")
 }
 
+func isAlwaysBlockedDialAddr(addr netip.Addr) bool {
+	unmapped := addr.Unmap()
+	return !unmapped.IsValid() ||
+		addr.Zone() != "" ||
+		unmapped.IsUnspecified() ||
+		unmapped.IsMulticast() ||
+		unmapped.IsLinkLocalUnicast() ||
+		unmapped.IsLinkLocalMulticast() ||
+		isCloudMetadataAddr(unmapped)
+}
+
+var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
+
+func isPrivateOrCarrierAddr(addr netip.Addr) bool {
+	unmapped := addr.Unmap()
+	return unmapped.IsPrivate() || cgnatPrefix.Contains(unmapped)
+}
+
+func isMetadataHostname(cleanHost string) bool {
+	return cleanHost == "metadata.google.internal" ||
+		cleanHost == "instance-data" ||
+		cleanHost == "metadata" ||
+		(strings.HasSuffix(cleanHost, ".internal") && strings.Contains(cleanHost, "metadata"))
+}
+
+func (server *proxyServer) isAllowlistedHost(cleanHost string) bool {
+	if server == nil || len(server.cfg.AllowedUpstreamOrigins) == 0 {
+		return false
+	}
+	for _, origin := range server.cfg.AllowedUpstreamOrigins {
+		parsed, err := url.Parse(origin)
+		if err != nil {
+			continue
+		}
+		if strings.TrimRight(strings.ToLower(parsed.Hostname()), ".") == cleanHost {
+			return true
+		}
+	}
+	return false
+}
+
+// newSafeDialContext resolves hostnames once per connection attempt, rejects
+// metadata/link-local/unspecified/multicast targets and DNS-rebinding to
+// loopback (or private ranges when BlockPrivateUpstreamIPs is enabled), and
+// dials the validated IP literal directly so the OS cannot perform a second
+// unvalidated DNS lookup (TOCTOU).
+func (server *proxyServer) newSafeDialContext(baseDialer *net.Dialer, lookup ipLookupFunc) func(ctx context.Context, network, address string) (net.Conn, error) {
+	if baseDialer == nil {
+		baseDialer = &net.Dialer{}
+	}
+	if lookup == nil {
+		lookup = net.DefaultResolver.LookupNetIP
+	}
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		cleanHost := strings.TrimRight(strings.ToLower(strings.TrimSpace(host)), ".")
+		if cleanHost == "" || strings.Contains(cleanHost, "%") || isMetadataHostname(cleanHost) {
+			return nil, errDNSRebindingBlocked
+		}
+		allowlisted := server.isAllowlistedHost(cleanHost)
+		blockPrivate := server != nil && server.cfg.BlockPrivateUpstreamIPs && !allowlisted
+
+		if literal, parseErr := netip.ParseAddr(cleanHost); parseErr == nil {
+			unmapped := literal.Unmap()
+			if isAlwaysBlockedDialAddr(literal) {
+				return nil, errDNSRebindingBlocked
+			}
+			if blockPrivate && (unmapped.IsLoopback() || isPrivateOrCarrierAddr(unmapped)) {
+				return nil, errDNSRebindingBlocked
+			}
+			return baseDialer.DialContext(ctx, network, net.JoinHostPort(unmapped.String(), port))
+		}
+		if hasNonStandardNumericIP(cleanHost) {
+			return nil, errDNSRebindingBlocked
+		}
+
+		ipNetwork := "ip"
+		switch network {
+		case "tcp4":
+			ipNetwork = "ip4"
+		case "tcp6":
+			ipNetwork = "ip6"
+		}
+		resolved, err := lookup(ctx, ipNetwork, cleanHost)
+		if err != nil {
+			return nil, err
+		}
+		if len(resolved) == 0 {
+			return nil, &net.DNSError{Err: "no such host", Name: host}
+		}
+
+		allowLoopback := cleanHost == "localhost" || strings.HasSuffix(cleanHost, ".localhost") || allowlisted
+		validAddrs := make([]netip.Addr, 0, len(resolved))
+		for _, candidate := range resolved {
+			unmapped := candidate.Unmap()
+			if isAlwaysBlockedDialAddr(candidate) {
+				return nil, errDNSRebindingBlocked
+			}
+			if unmapped.IsLoopback() && !allowLoopback {
+				return nil, errDNSRebindingBlocked
+			}
+			if blockPrivate && (unmapped.IsLoopback() || isPrivateOrCarrierAddr(unmapped)) {
+				return nil, errDNSRebindingBlocked
+			}
+			validAddrs = append(validAddrs, unmapped)
+		}
+
+		var lastErr error
+		for _, addr := range validAddrs {
+			conn, dialErr := baseDialer.DialContext(ctx, network, net.JoinHostPort(addr.String(), port))
+			if dialErr == nil {
+				return conn, nil
+			}
+			lastErr = dialErr
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+		}
+		return nil, lastErr
+	}
+}
+
 func hasNonStandardNumericIP(host string) bool {
 	labels := strings.Split(host, ".")
 	if len(labels) == 0 {
@@ -109,10 +243,27 @@ func protocolSupportsPath(protocol, path string) bool {
 	if pathOnly == "/v1/responses" {
 		return p == protocolResponses
 	}
-	if p == protocolGenAI {
+	if pathOnly == "/v1/messages" {
+		return true
+	}
+	if pathOnly == "/v1/messages/count_tokens" {
+		return p == protocolAnthropic
+	}
+	if p == protocolGenAI || p == protocolAnthropic {
 		return pathOnly == "/v1/chat/completions" || pathOnly == "/v1/models" || pathOnly == "/models"
 	}
 	return true
+}
+
+func defaultBaseURLForProtocol(protocol string) string {
+	switch effectiveProtocol(protocol) {
+	case protocolGenAI:
+		return DefaultGenAIBaseURL
+	case protocolAnthropic:
+		return DefaultAnthropicBaseURL
+	default:
+		return ""
+	}
 }
 
 func upstreamOrigin(base *url.URL) string {
@@ -147,15 +298,15 @@ func (server *proxyServer) upstreamSettings(key *selectedAPIKey) (*url.URL, stri
 		protocol = effectiveProtocol(key.APIProtocol)
 	}
 	raw := server.cfg.UpstreamURL.String()
-	if protocol == protocolGenAI && (server.cfg.UpstreamURL == nil || server.cfg.UpstreamProtocol != protocolGenAI) {
-		raw = DefaultGenAIBaseURL
+	if defURL := defaultBaseURLForProtocol(protocol); defURL != "" && (server.cfg.UpstreamURL == nil || server.cfg.UpstreamProtocol != protocol) {
+		raw = defURL
 	}
 	profile := server.cfg.Profile
 	if key != nil {
 		if key.BaseURL != "" {
 			raw = key.BaseURL
-		} else if protocol == protocolGenAI {
-			raw = DefaultGenAIBaseURL
+		} else if defURL := defaultBaseURLForProtocol(protocol); defURL != "" {
+			raw = defURL
 		}
 	}
 	if !validProtocol(protocol) {
@@ -181,16 +332,33 @@ func (server *proxyServer) usesWAFCookies(base *url.URL, profile string) bool {
 // Prepare from the original client payload on EVERY attempt, so failover may
 // change protocols without reusing a payload converted for another upstream.
 func (server *proxyServer) prepareUpstream(path string, body []byte, protocol string) (string, []byte, *requestMeta, error) {
+	pathOnly, _, _ := strings.Cut(path, "?")
+	if pathOnly == "/v1/messages" {
+		return server.prepareAnthropicInbound(body, protocol)
+	}
 	if protocol == protocolGenAI {
 		if !protocolSupportsPath(protocolGenAI, path) {
 			return "", nil, nil, errNoCompatibleUpstream
 		}
 		return path, body, nil, nil
 	}
-	if path == "/v1/responses" && protocol != protocolResponses {
+	if protocol == protocolAnthropic {
+		if !protocolSupportsPath(protocolAnthropic, path) {
+			return "", nil, nil, errNoCompatibleUpstream
+		}
+		if pathOnly == "/v1/chat/completions" {
+			converted, meta, err := convertChatToAnthropicRequest(body)
+			if err != nil {
+				return "", nil, nil, fmt.Errorf("%w: %v", errInvalidUpstreamRequest, err)
+			}
+			return "/v1/messages", converted, &meta, nil
+		}
+		return path, body, nil, nil
+	}
+	if pathOnly == "/v1/responses" && protocol != protocolResponses {
 		return "", nil, nil, errNoCompatibleUpstream
 	}
-	if path != "/v1/chat/completions" || protocol == protocolChatCompletions {
+	if pathOnly != "/v1/chat/completions" || protocol == protocolChatCompletions {
 		return path, body, nil, nil
 	}
 	converted, meta, err := convertChatRequest(body)
@@ -204,5 +372,6 @@ func (server *proxyServer) prepareUpstream(path string, body []byte, protocol st
 		}
 		meta.ForceSequentialTools = true
 	}
+	meta.UpstreamFormat = "responses"
 	return "/v1/responses", converted, &meta, nil
 }

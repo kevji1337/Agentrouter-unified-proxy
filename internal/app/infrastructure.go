@@ -17,30 +17,50 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+const stateSyncChannel = "agentrouter:state-sync"
+
+var errGatewayStateConflict = errors.New("gateway state revision conflict")
+
+type stateSyncMessage struct {
+	Instance string `json:"instance"`
+	Revision uint64 `json:"revision"`
+}
+
 type infrastructure struct {
-	db             *sql.DB
-	redis          *redis.Client
-	httpClient     *http.Client
-	events         chan map[string]any
-	stopCh         chan struct{}
-	closeOnce      sync.Once
-	wg             sync.WaitGroup
-	telegramToken  string
-	telegramChatID string
-	alertCooldown  time.Duration
-	alertMu        sync.Mutex
-	lastAlerts     map[string]time.Time
+	instanceID         string
+	db                 *sql.DB
+	redis              *redis.Client
+	httpClient         *http.Client
+	events             chan map[string]any
+	stopCh             chan struct{}
+	closeOnce          sync.Once
+	wg                 sync.WaitGroup
+	auditRetentionDays int
+	stateSyncInterval  time.Duration
+	syncMu             sync.Mutex
+	telegramToken      string
+	telegramChatID     string
+	alertCooldown      time.Duration
+	alertMu            sync.Mutex
+	lastAlerts         map[string]time.Time
 }
 
 func newInfrastructure(ctx context.Context, cfg config) (*infrastructure, error) {
+	syncInterval := cfg.StateSyncInterval
+	if syncInterval <= 0 {
+		syncInterval = 5 * time.Second
+	}
 	infra := &infrastructure{
-		events:         make(chan map[string]any, 512),
-		stopCh:         make(chan struct{}),
-		httpClient:     &http.Client{Timeout: 10 * time.Second},
-		telegramToken:  cfg.TelegramBotToken,
-		telegramChatID: cfg.TelegramChatID,
-		alertCooldown:  cfg.AlertCooldown,
-		lastAlerts:     make(map[string]time.Time),
+		instanceID:         newRequestID(),
+		events:             make(chan map[string]any, 512),
+		stopCh:             make(chan struct{}),
+		httpClient:         &http.Client{Timeout: 10 * time.Second},
+		auditRetentionDays: cfg.AuditRetentionDays,
+		stateSyncInterval:  syncInterval,
+		telegramToken:      cfg.TelegramBotToken,
+		telegramChatID:     cfg.TelegramChatID,
+		alertCooldown:      cfg.AlertCooldown,
+		lastAlerts:         make(map[string]time.Time),
 	}
 	if cfg.DatabaseURL != "" {
 		db, err := sql.Open("pgx", cfg.DatabaseURL)
@@ -126,7 +146,9 @@ func (infra *infrastructure) Close() {
 
 func (infra *infrastructure) migrate(ctx context.Context) error {
 	statements := []string{
-		`CREATE TABLE IF NOT EXISTS gateway_state (id TEXT PRIMARY KEY, payload BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+		`CREATE TABLE IF NOT EXISTS gateway_state (id TEXT PRIMARY KEY, payload BYTEA NOT NULL, revision BIGINT NOT NULL DEFAULT 1, updated_by TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+		`ALTER TABLE gateway_state ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 1`,
+		`ALTER TABLE gateway_state ADD COLUMN IF NOT EXISTS updated_by TEXT NOT NULL DEFAULT ''`,
 		`CREATE TABLE IF NOT EXISTS audit_events (id BIGSERIAL PRIMARY KEY, occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(), level TEXT NOT NULL, message TEXT NOT NULL, fields JSONB NOT NULL DEFAULT '{}'::jsonb)`,
 		`CREATE INDEX IF NOT EXISTS audit_events_occurred_at_idx ON audit_events (occurred_at DESC)`,
 		`DELETE FROM audit_events WHERE message='request_completed' AND fields->>'path' IN ('/api/admin/logs','/health','/metrics')`,
@@ -139,21 +161,290 @@ func (infra *infrastructure) migrate(ctx context.Context) error {
 	return nil
 }
 
+func (infra *infrastructure) pruneAuditEvents(ctx context.Context) (int64, error) {
+	if infra == nil || infra.db == nil || infra.auditRetentionDays <= 0 {
+		return 0, nil
+	}
+	var totalDeleted int64
+	const batchSize = 5000
+	for batch := 0; batch < 10; batch++ {
+		pruneCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		res, err := infra.db.ExecContext(pruneCtx, `
+			DELETE FROM audit_events
+			WHERE id IN (
+				SELECT id FROM audit_events
+				WHERE occurred_at < now() - ($1 * interval '1 day')
+				ORDER BY occurred_at ASC
+				LIMIT $2
+			)`, infra.auditRetentionDays, batchSize)
+		cancel()
+		if err != nil {
+			return totalDeleted, err
+		}
+		affected, _ := res.RowsAffected()
+		totalDeleted += affected
+		if affected < batchSize {
+			break
+		}
+	}
+	if totalDeleted > 0 {
+		logEvent("info", "audit_events_pruned", map[string]any{
+			"deleted":        totalDeleted,
+			"retention_days": infra.auditRetentionDays,
+		})
+	}
+	return totalDeleted, nil
+}
+
 func (infra *infrastructure) loadGatewayState(ctx context.Context) ([]byte, error) {
+	payload, _, err := infra.loadGatewayStateWithRevision(ctx)
+	return payload, err
+}
+
+func (infra *infrastructure) loadGatewayStateWithRevision(ctx context.Context) ([]byte, uint64, error) {
 	if infra == nil || infra.db == nil {
-		return nil, sql.ErrNoRows
+		return nil, 0, sql.ErrNoRows
 	}
 	var payload []byte
-	err := infra.db.QueryRowContext(ctx, `SELECT payload FROM gateway_state WHERE id='key-store'`).Scan(&payload)
-	return payload, err
+	var revision int64
+	err := infra.db.QueryRowContext(ctx, `SELECT payload, revision FROM gateway_state WHERE id='key-store'`).Scan(&payload, &revision)
+	if err != nil {
+		return nil, 0, err
+	}
+	return payload, uint64(max(revision, 1)), nil
+}
+
+func (infra *infrastructure) gatewayStateRevision(ctx context.Context) (uint64, error) {
+	if infra == nil || infra.db == nil {
+		return 0, sql.ErrNoRows
+	}
+	var revision int64
+	err := infra.db.QueryRowContext(ctx, `SELECT revision FROM gateway_state WHERE id='key-store'`).Scan(&revision)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(max(revision, 1)), nil
 }
 
 func (infra *infrastructure) saveGatewayState(ctx context.Context, payload []byte) error {
 	if infra == nil || infra.db == nil {
 		return nil
 	}
-	_, err := infra.db.ExecContext(ctx, `INSERT INTO gateway_state(id,payload,updated_at) VALUES('key-store',$1,now()) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload, updated_at=now()`, payload)
+	_, err := infra.db.ExecContext(ctx, `INSERT INTO gateway_state(id,payload,revision,updated_by,updated_at) VALUES('key-store',$1,1,$2,now()) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload, revision=gateway_state.revision+1, updated_by=excluded.updated_by, updated_at=now()`, payload, infra.instanceID)
 	return err
+}
+
+func (infra *infrastructure) saveGatewayStateCAS(ctx context.Context, payload []byte, expectedRev uint64) (uint64, error) {
+	if infra == nil || infra.db == nil {
+		return expectedRev + 1, nil
+	}
+	var newRev int64
+	var err error
+	if expectedRev == 0 {
+		err = infra.db.QueryRowContext(ctx,
+			`INSERT INTO gateway_state(id,payload,revision,updated_by,updated_at) VALUES('key-store',$1,1,$2,now()) ON CONFLICT(id) DO NOTHING RETURNING revision`,
+			payload, infra.instanceID,
+		).Scan(&newRev)
+	} else {
+		err = infra.db.QueryRowContext(ctx,
+			`UPDATE gateway_state SET payload=$1, revision=revision+1, updated_by=$2, updated_at=now() WHERE id='key-store' AND revision=$3 RETURNING revision`,
+			payload, infra.instanceID, int64(expectedRev),
+		).Scan(&newRev)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, errGatewayStateConflict
+	}
+	if err != nil {
+		return 0, err
+	}
+	rev := uint64(max(newRev, 1))
+	infra.publishStateSync(ctx, rev)
+	return rev, nil
+}
+
+func (infra *infrastructure) publishStateSync(ctx context.Context, revision uint64) {
+	if infra == nil || infra.redis == nil {
+		return
+	}
+	msg, err := json.Marshal(stateSyncMessage{Instance: infra.instanceID, Revision: revision})
+	if err != nil {
+		return
+	}
+	pubCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_ = infra.redis.Publish(pubCtx, stateSyncChannel, msg).Err()
+}
+
+func (infra *infrastructure) syncRemoteStateOnce(ctx context.Context, getLocalRev func() uint64, apply func([]byte, uint64) error) bool {
+	if infra == nil || infra.db == nil || getLocalRev == nil || apply == nil {
+		return false
+	}
+	infra.syncMu.Lock()
+	defer infra.syncMu.Unlock()
+
+	localRev := getLocalRev()
+	checkCtx, cancelCheck := context.WithTimeout(ctx, 3*time.Second)
+	remoteRev, err := infra.gatewayStateRevision(checkCtx)
+	cancelCheck()
+	if err != nil || remoteRev <= localRev {
+		return false
+	}
+
+	loadCtx, cancelLoad := context.WithTimeout(ctx, 5*time.Second)
+	payload, loadedRev, err := infra.loadGatewayStateWithRevision(loadCtx)
+	cancelLoad()
+	if err != nil || loadedRev <= localRev {
+		return false
+	}
+	if err := apply(payload, loadedRev); err != nil {
+		logEvent("warn", "gateway_state_sync_failed", map[string]any{"error": err.Error()})
+		return false
+	}
+	return true
+}
+
+func (infra *infrastructure) startStateSync(ctx context.Context, getLocalRev func() uint64, apply func([]byte, uint64) error) {
+	if infra == nil || infra.db == nil {
+		return
+	}
+	interval := infra.stateSyncInterval
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	infra.wg.Add(1)
+	go func() {
+		defer infra.wg.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-infra.stopCh:
+				return
+			case <-ticker.C:
+				infra.syncRemoteStateOnce(ctx, getLocalRev, apply)
+			}
+		}
+	}()
+
+	if infra.redis != nil {
+		infra.wg.Add(1)
+		go func() {
+			defer infra.wg.Done()
+			pubsub := infra.redis.Subscribe(ctx, stateSyncChannel)
+			defer func() { _ = pubsub.Close() }()
+			ch := pubsub.Channel()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-infra.stopCh:
+					return
+				case msg, ok := <-ch:
+					if !ok || msg == nil {
+						return
+					}
+					var parsed stateSyncMessage
+					if json.Unmarshal([]byte(msg.Payload), &parsed) == nil {
+						if parsed.Instance == infra.instanceID || parsed.Revision <= getLocalRev() {
+							continue
+						}
+					}
+					infra.syncRemoteStateOnce(ctx, getLocalRev, apply)
+				}
+			}
+		}()
+	}
+}
+
+func (infra *infrastructure) queryAuditPage(ctx context.Context, after uint64, limit int) (logPage, bool) {
+	if infra == nil || infra.db == nil {
+		return logPage{}, false
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 200
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	var maxID int64
+	if err := infra.db.QueryRowContext(queryCtx, `SELECT COALESCE(MAX(id), 0) FROM audit_events`).Scan(&maxID); err != nil {
+		return logPage{}, false
+	}
+	const clusterInstance = "postgres-cluster"
+	if maxID <= 0 {
+		return logPage{Data: []map[string]any{}, Instance: clusterInstance, NextAfter: 0}, true
+	}
+	reset := false
+	if after > uint64(maxID) {
+		reset = true
+		after = 0
+	}
+	if after == 0 {
+		rows, err := infra.db.QueryContext(queryCtx, `SELECT id, fields FROM audit_events ORDER BY id DESC LIMIT $1`, limit)
+		if err != nil {
+			return logPage{}, false
+		}
+		defer rows.Close()
+		items := make([]map[string]any, 0, limit)
+		var nextAfter uint64
+		for rows.Next() {
+			var id int64
+			var raw []byte
+			if err := rows.Scan(&id, &raw); err != nil {
+				continue
+			}
+			var entry map[string]any
+			if json.Unmarshal(raw, &entry) != nil || entry == nil {
+				continue
+			}
+			seq := uint64(id)
+			entry["seq"] = seq
+			if seq > nextAfter {
+				nextAfter = seq
+			}
+			items = append(items, entry)
+		}
+		for l, r := 0, len(items)-1; l < r; l, r = l+1, r-1 {
+			items[l], items[r] = items[r], items[l]
+		}
+		if nextAfter == 0 {
+			nextAfter = uint64(maxID)
+		}
+		return logPage{Data: items, Instance: clusterInstance, NextAfter: nextAfter, Reset: reset}, true
+	}
+
+	rows, err := infra.db.QueryContext(queryCtx, `SELECT id, fields FROM audit_events WHERE id > $1 ORDER BY id ASC LIMIT $2`, int64(after), limit+1)
+	if err != nil {
+		return logPage{}, false
+	}
+	defer rows.Close()
+	items := make([]map[string]any, 0, limit+1)
+	for rows.Next() {
+		var id int64
+		var raw []byte
+		if err := rows.Scan(&id, &raw); err != nil {
+			continue
+		}
+		var entry map[string]any
+		if json.Unmarshal(raw, &entry) != nil || entry == nil {
+			continue
+		}
+		entry["seq"] = uint64(id)
+		items = append(items, entry)
+	}
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
+	nextAfter := after
+	if len(items) > 0 {
+		if seq, ok := items[len(items)-1]["seq"].(uint64); ok {
+			nextAfter = seq
+		}
+	}
+	return logPage{Data: items, Instance: clusterInstance, NextAfter: nextAfter, HasMore: hasMore}, true
 }
 
 func (infra *infrastructure) eventWorker() {
@@ -238,12 +529,27 @@ func (infra *infrastructure) monitor(ctx context.Context) {
 	defer infra.wg.Done()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+	retentionTicker := time.NewTicker(time.Hour)
+	defer retentionTicker.Stop()
+
+	if infra.db != nil && infra.auditRetentionDays > 0 {
+		if _, err := infra.pruneAuditEvents(ctx); err != nil && ctx.Err() == nil {
+			logEvent("warn", "audit_events_prune_failed", map[string]any{"error": err.Error()})
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-infra.stopCh:
 			return
+		case <-retentionTicker.C:
+			if infra.db != nil && infra.auditRetentionDays > 0 {
+				if _, err := infra.pruneAuditEvents(ctx); err != nil && ctx.Err() == nil {
+					logEvent("warn", "audit_events_prune_failed", map[string]any{"error": err.Error()})
+				}
+			}
 		case <-ticker.C:
 			if infra.db != nil {
 				probe, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -315,7 +621,19 @@ func (infra *infrastructure) acquireKey(ctx context.Context, id string) func() {
 }
 
 func (infra *infrastructure) health() map[string]any {
-	return map[string]any{"postgres": infra != nil && infra.db != nil, "redis": infra != nil && infra.redis != nil, "telegram": infra != nil && infra.telegramToken != "" && infra.telegramChatID != ""}
+	instanceID := ""
+	retentionDays := 0
+	if infra != nil {
+		instanceID = infra.instanceID
+		retentionDays = infra.auditRetentionDays
+	}
+	return map[string]any{
+		"instance_id":          instanceID,
+		"postgres":             infra != nil && infra.db != nil,
+		"redis":                infra != nil && infra.redis != nil,
+		"telegram":             infra != nil && infra.telegramToken != "" && infra.telegramChatID != "",
+		"audit_retention_days": retentionDays,
+	}
 }
 
 func (infra *infrastructure) saveAdminSession(ctx context.Context, id string, session adminSession) {

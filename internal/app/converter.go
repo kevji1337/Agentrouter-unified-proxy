@@ -18,6 +18,8 @@ type requestMeta struct {
 	IncludeUsage         bool
 	RequestID            string
 	ForceSequentialTools bool
+	SourceFormat         string
+	UpstreamFormat       string
 }
 
 func enforceSequentialTools(raw []byte) ([]byte, error) {
@@ -408,6 +410,7 @@ func convertResponsesResponse(raw []byte, fallbackModel string) ([]byte, error) 
 
 	var text strings.Builder
 	var refusal strings.Builder
+	var reasoning strings.Builder
 	toolCalls := make([]any, 0)
 	if output, ok := response["output"].([]any); ok {
 		for _, rawItem := range output {
@@ -416,6 +419,21 @@ func convertResponsesResponse(raw []byte, fallbackModel string) ([]byte, error) 
 				continue
 			}
 			switch item["type"] {
+			case "reasoning":
+				for _, listKey := range []string{"summary", "content"} {
+					if parts, ok := item[listKey].([]any); ok {
+						for _, rawPart := range parts {
+							if part, ok := rawPart.(map[string]any); ok {
+								if value, ok := part["text"].(string); ok && value != "" {
+									if reasoning.Len() > 0 {
+										reasoning.WriteByte('\n')
+									}
+									reasoning.WriteString(value)
+								}
+							}
+						}
+					}
+				}
 			case "message":
 				if parts, ok := item["content"].([]any); ok {
 					for _, rawPart := range parts {
@@ -470,6 +488,9 @@ func convertResponsesResponse(raw []byte, fallbackModel string) ([]byte, error) 
 	}
 	if refusal.Len() > 0 {
 		message["refusal"] = refusal.String()
+	}
+	if reasoning.Len() > 0 {
+		message["reasoning_content"] = reasoning.String()
 	}
 	if len(toolCalls) > 0 {
 		message["tool_calls"] = toolCalls

@@ -133,6 +133,8 @@ func parseUsage(raw []byte) (uint64, uint64) {
 		return input, output
 	}
 	lines := bytes.Split(raw, []byte("\n"))
+	var found bool
+	var lastInput, lastOutput uint64
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := bytes.TrimSpace(lines[i])
 		if !bytes.HasPrefix(line, []byte("data:")) {
@@ -140,10 +142,19 @@ func parseUsage(raw []byte) (uint64, uint64) {
 		}
 		data := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
 		if input, output, ok := usageFromJSON(data); ok {
-			return input, output
+			if !found {
+				lastInput, lastOutput = input, output
+				found = true
+				if lastInput > 0 {
+					return lastInput, lastOutput
+				}
+			} else if lastInput == 0 && input > 0 {
+				lastInput = input
+				return lastInput, lastOutput
+			}
 		}
 	}
-	return 0, 0
+	return lastInput, lastOutput
 }
 
 func usageFromJSON(raw []byte) (uint64, uint64, bool) {
@@ -153,6 +164,10 @@ func usageFromJSON(raw []byte) (uint64, uint64, bool) {
 	}
 	if response, ok := event["response"].(map[string]any); ok {
 		event = response
+	} else if message, ok := event["message"].(map[string]any); ok {
+		if _, hasUsage := event["usage"].(map[string]any); !hasUsage {
+			event = message
+		}
 	}
 	usage, ok := event["usage"].(map[string]any)
 	if !ok {
@@ -165,7 +180,8 @@ func usageFromJSON(raw []byte) (uint64, uint64, bool) {
 	if output == nil {
 		output = usage["completion_tokens"]
 	}
-	return uint64Value(input), uint64Value(output), true
+	inTokens := uint64Value(input) + uint64Value(usage["cache_creation_input_tokens"]) + uint64Value(usage["cache_read_input_tokens"])
+	return inTokens, uint64Value(output), true
 }
 
 func uint64Value(value any) uint64 {

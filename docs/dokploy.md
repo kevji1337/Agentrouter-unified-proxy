@@ -57,6 +57,8 @@ SSE_IDLE_TIMEOUT=10m
 STORAGE_BACKEND=postgres
 DATABASE_URL=postgresql://agentrouter:PASSWORD@agentrouter-postgres:5432/agentrouter?sslmode=disable
 REDIS_URL=redis://:PASSWORD@agentrouter-redis:6379/0
+AUDIT_RETENTION_DAYS=30
+STATE_SYNC_INTERVAL=5s
 TELEGRAM_BOT_TOKEN=<telegram-bot-token>
 TELEGRAM_CHAT_ID=<telegram-chat-id>
 ALERT_COOLDOWN=5m
@@ -91,10 +93,11 @@ HTTPS. Point the domain's DNS record to the Dokploy host first.
 Example endpoints:
 
 ```text
-OpenAI base URL: https://api.example.com/v1
-Admin panel:     https://api.example.com/admin
-Health:          https://api.example.com/health
-Metrics:         https://api.example.com/metrics
+OpenAI base URL:    https://api.example.com/v1
+Anthropic base URL: https://api.example.com
+Admin panel:        https://api.example.com/admin
+Health:             https://api.example.com/health
+Metrics:            https://api.example.com/metrics
 ```
 
 Do not create a direct public host-port mapping for `8080`; only Dokploy's

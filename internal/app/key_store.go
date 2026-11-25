@@ -177,7 +177,12 @@ type apiKeyStore struct {
 	loadErr            error
 	readOnly           bool
 	settings           persistedKeySettings
+	stateRevision      uint64
+	dirtyTelemetry     bool
+	lastTelemetrySave  time.Time
 	saveHook           func([]byte) error
+	versionedSaveHook  func([]byte, uint64) (uint64, error)
+	onStateConflict    func()
 }
 
 type apiKeyStoreStatus struct {
@@ -268,17 +273,21 @@ func (store *apiKeyStore) load() error {
 	return nil
 }
 
-func (store *apiKeyStore) saveLocked() error {
+func (store *apiKeyStore) marshalStateLocked() ([]byte, error) {
+	file := persistedKeyFile{
+		AdminPasswords: store.adminPasswords, AdminSessions: store.savedAdminSessions,
+		Version: 2, Providers: store.providers, Proxies: store.proxies,
+		Keys: store.keys, ClientKeys: store.clientKeys, Settings: store.settings,
+	}
+	return json.MarshalIndent(file, "", "  ")
+}
+
+func (store *apiKeyStore) writeLocalFileLocked(raw []byte) error {
 	if store.path == "" {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(store.path), 0o700); err != nil {
 		return fmt.Errorf("create key store directory: %w", err)
-	}
-	file := persistedKeyFile{AdminPasswords: store.adminPasswords, AdminSessions: store.savedAdminSessions, Version: 2, Providers: store.providers, Proxies: store.proxies, Keys: store.keys, ClientKeys: store.clientKeys, Settings: store.settings}
-	raw, err := json.MarshalIndent(file, "", "  ")
-	if err != nil {
-		return err
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(store.path), ".keys-*.tmp")
 	if err != nil {
@@ -304,12 +313,67 @@ func (store *apiKeyStore) saveLocked() error {
 	if err := os.Rename(temporaryName, store.path); err != nil {
 		return fmt.Errorf("replace key store: %w", err)
 	}
-	if store.saveHook != nil {
+	return nil
+}
+
+func (store *apiKeyStore) saveLocked() error {
+	if store.path == "" && store.saveHook == nil && store.versionedSaveHook == nil {
+		return nil
+	}
+	raw, err := store.marshalStateLocked()
+	if err != nil {
+		return err
+	}
+	if err := store.writeLocalFileLocked(raw); err != nil {
+		return err
+	}
+	if store.versionedSaveHook != nil {
+		newRev, err := store.versionedSaveHook(raw, store.stateRevision)
+		if err != nil {
+			if errors.Is(err, errGatewayStateConflict) && store.onStateConflict != nil {
+				go store.onStateConflict()
+			}
+			return fmt.Errorf("persist key store: %w", err)
+		}
+		store.stateRevision = newRev
+	} else if store.saveHook != nil {
 		if err := store.saveHook(raw); err != nil {
 			return fmt.Errorf("persist key store: %w", err)
 		}
 	}
+	store.dirtyTelemetry = false
+	store.lastTelemetrySave = time.Now().UTC()
 	return nil
+}
+
+func (store *apiKeyStore) saveTelemetryLocked(now time.Time) error {
+	store.dirtyTelemetry = true
+	if !store.lastTelemetrySave.IsZero() && now.Sub(store.lastTelemetrySave) < 5*time.Second {
+		return nil
+	}
+	return store.saveLocked()
+}
+
+func (store *apiKeyStore) flushTelemetry() {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if !store.dirtyTelemetry {
+		return
+	}
+	_ = store.saveLocked()
+}
+
+func (store *apiKeyStore) revision() uint64 {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.stateRevision
+}
+
+func (store *apiKeyStore) setVersionedSaveHook(hook func([]byte, uint64) (uint64, error), onConflict func()) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.versionedSaveHook = hook
+	store.onStateConflict = onConflict
 }
 
 func (store *apiKeyStore) setSaveHook(hook func([]byte) error) {
@@ -703,7 +767,7 @@ func (store *apiKeyStore) selectNextCompatible(excluded map[string]bool, model s
 	record.Uses++
 	record.DailyRequests++
 	record.LastUsed = now
-	if err := store.saveLocked(); err != nil {
+	if err := store.saveTelemetryLocked(now); err != nil {
 		logEvent("warn", "key_store_telemetry_save_failed", map[string]any{"error": err.Error()})
 	}
 	return store.selectedKeyLocked(*record, plain)
@@ -772,11 +836,12 @@ func (store *apiKeyStore) recordUsage(id string, inputTokens, outputTokens uint6
 		return
 	}
 	record := &store.keys[index]
-	resetUsagePeriods(record, time.Now().UTC())
+	now := time.Now().UTC()
+	resetUsagePeriods(record, now)
 	record.InputTokens += inputTokens
 	record.OutputTokens += outputTokens
 	record.MonthlySpendUSD += float64(inputTokens)*record.InputCostPerMillion/1_000_000 + float64(outputTokens)*record.OutputCostPerMillion/1_000_000
-	_ = store.saveLocked()
+	_ = store.saveTelemetryLocked(now)
 }
 
 func (store *apiKeyStore) enabledForProbe() ([]selectedAPIKey, error) {
@@ -917,6 +982,127 @@ func (store *apiKeyStore) importState(raw []byte, restoreSessions bool) error {
 		return err
 	}
 	return nil
+}
+
+// applyRemoteState hydrates in-memory state from a newer cluster revision
+// without triggering saveHook back to PostgreSQL, while preserving higher
+// monotonic runtime telemetry accumulated on this replica.
+func (store *apiKeyStore) applyRemoteState(raw []byte, revision uint64) (string, bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ready(); err != nil {
+		return "", false, err
+	}
+	if revision > 0 && revision <= store.stateRevision {
+		return "", false, nil
+	}
+	var file persistedKeyFile
+	if err := json.Unmarshal(raw, &file); err != nil {
+		return "", false, err
+	}
+	if file.Version != 1 && file.Version != 2 {
+		return "", false, fmt.Errorf("unsupported backup version %d", file.Version)
+	}
+	if err := validateAdminAccessFile(file); err != nil {
+		return "", false, err
+	}
+	if err := store.validateProviderFile(file); err != nil {
+		return "", false, err
+	}
+	if err := store.validateProxyFile(file); err != nil {
+		return "", false, err
+	}
+	for i := range file.Keys {
+		normalizeKeyPolicy(&file.Keys[i])
+		if err := validateKeyPolicy(file.Keys[i]); err != nil {
+			return "", false, err
+		}
+		if _, err := store.decrypt(file.Keys[i]); err != nil {
+			return "", false, fmt.Errorf("remote state cannot be decrypted with current KEY_STORE_SECRET: %w", err)
+		}
+	}
+	for i := range file.ClientKeys {
+		plain, err := store.decryptClientKey(file.ClientKeys[i])
+		if err != nil {
+			return "", false, fmt.Errorf("remote client key cannot be decrypted with current KEY_STORE_SECRET: %w", err)
+		}
+		file.ClientKeys[i].digest = sha256.Sum256([]byte(plain))
+		file.ClientKeys[i].hasDigest = true
+	}
+
+	localByID := make(map[string]persistedAPIKey, len(store.keys))
+	for _, k := range store.keys {
+		localByID[k.ID] = k
+	}
+	for i := range file.Keys {
+		rk := &file.Keys[i]
+		if lk, ok := localByID[rk.ID]; ok && lk.Ciphertext == rk.Ciphertext {
+			if lk.Uses > rk.Uses {
+				rk.Uses = lk.Uses
+			}
+			if lk.Failures > rk.Failures {
+				rk.Failures = lk.Failures
+			}
+			if lk.LastUsed.After(rk.LastUsed) {
+				rk.LastUsed = lk.LastUsed
+			}
+			if lk.UsageDay != "" && lk.UsageDay == rk.UsageDay && lk.DailyRequests > rk.DailyRequests {
+				rk.DailyRequests = lk.DailyRequests
+			}
+			if lk.UsageMonth != "" && lk.UsageMonth == rk.UsageMonth {
+				if lk.InputTokens > rk.InputTokens {
+					rk.InputTokens = lk.InputTokens
+				}
+				if lk.OutputTokens > rk.OutputTokens {
+					rk.OutputTokens = lk.OutputTokens
+				}
+				if lk.MonthlySpendUSD > rk.MonthlySpendUSD {
+					rk.MonthlySpendUSD = lk.MonthlySpendUSD
+				}
+			}
+			if lk.CooldownUntil.After(rk.CooldownUntil) && lk.UpdatedAt.Equal(rk.UpdatedAt) {
+				rk.CooldownUntil = lk.CooldownUntil
+				rk.LastError = lk.LastError
+			}
+		}
+	}
+
+	localClients := make(map[string]persistedClientKey, len(store.clientKeys))
+	for _, ck := range store.clientKeys {
+		localClients[ck.ID] = ck
+	}
+	for i := range file.ClientKeys {
+		rck := &file.ClientKeys[i]
+		if lck, ok := localClients[rck.ID]; ok {
+			if lck.Uses > rck.Uses {
+				rck.Uses = lck.Uses
+			}
+			if lck.LastUsed.After(rck.LastUsed) {
+				rck.LastUsed = lck.LastUsed
+			}
+		}
+	}
+
+	store.adminPasswords = file.AdminPasswords
+	store.savedAdminSessions = file.AdminSessions
+	store.keys = file.Keys
+	store.providers = file.Providers
+	store.proxies = file.Proxies
+	store.clientKeys = file.ClientKeys
+	store.settings = file.Settings
+	if len(store.proxies) > 0 {
+		store.settings.NetworkProxyPool = true
+	}
+	store.rebalanceProxiesLocked()
+	if revision > 0 {
+		store.stateRevision = revision
+	}
+	store.dirtyTelemetry = false
+	store.lastTelemetrySave = time.Now().UTC()
+	if mergedRaw, err := store.marshalStateLocked(); err == nil {
+		_ = store.writeLocalFileLocked(mergedRaw)
+	}
+	return store.settings.SelectionMode, true, nil
 }
 
 func (store *apiKeyStore) savedSelectionMode() string {

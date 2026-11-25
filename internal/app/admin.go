@@ -83,8 +83,12 @@ func (server *proxyServer) handleAdminAPI(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if r.URL.Path == "/api/admin/login" {
+		server.syncStateIfBehind(r.Context())
 		server.handleAdminLogin(w, r)
 		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		server.syncStateIfBehind(r.Context())
 	}
 	account, err := server.authenticateAdmin(r)
 	if errors.Is(err, errAdminCSRF) {
@@ -312,6 +316,7 @@ func (server *proxyServer) handleAdminStatus(w http.ResponseWriter, r *http.Requ
 		"response_cache":        server.cache.stats(),
 		"store":                 server.keys.status(), "force_sequential_tools": server.cfg.ForceSequentialTools,
 		"stateless_responses": server.cfg.StatelessResponses,
+		"state_revision":      server.keys.revision(),
 		"infrastructure":      server.infra.health(),
 		"admin":               map[string]any{"name": account.Name, "role": account.Role, "password_set": passwordSet},
 	})
@@ -490,6 +495,10 @@ func (server *proxyServer) handleAdminLogs(w http.ResponseWriter, r *http.Reques
 	}
 	after, _ := strconv.ParseUint(r.URL.Query().Get("after"), 10, 64)
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if page, ok := server.infra.queryAuditPage(r.Context(), after, limit); ok {
+		writeJSON(w, http.StatusOK, page)
+		return
+	}
 	writeJSON(w, http.StatusOK, adminLogRing.page(after, limit))
 }
 
@@ -552,8 +561,8 @@ func (server *proxyServer) validateAdminPolicy(policy apiKeyPolicy) error {
 		return errors.New("provider not found")
 	}
 	if strings.TrimSpace(raw) == "" {
-		if effectiveProtocol(policy.APIProtocol) == protocolGenAI {
-			raw = DefaultGenAIBaseURL
+		if protoDefault := defaultBaseURLForProtocol(policy.APIProtocol); protoDefault != "" {
+			raw = protoDefault
 		} else {
 			raw = server.cfg.UpstreamURL.String()
 		}
@@ -587,7 +596,12 @@ func (server *proxyServer) probeAPIKey(ctx context.Context, key selectedAPIKey) 
 		return http.StatusBadGateway, "upstream request failed"
 	}
 	req.Header = spoofHeaders(profile)
-	req.Header.Set("Authorization", "Bearer "+key.Key)
+	if protocol == protocolAnthropic {
+		req.Header.Set("X-Api-Key", key.Key)
+		req.Header.Set("Anthropic-Version", DefaultAnthropicVersion)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+key.Key)
+	}
 	if cookie := route.cookies.header(); cookie != "" && wafEnabled {
 		req.Header.Set("Cookie", cookie)
 	}
@@ -631,6 +645,10 @@ func decodeAdminJSON(w http.ResponseWriter, r *http.Request, target any) error {
 func writeAdminStoreError(w http.ResponseWriter, err error) {
 	if errors.Is(err, os.ErrNotExist) {
 		writeError(w, http.StatusNotFound, "key_not_found", "API key not found")
+		return
+	}
+	if errors.Is(err, errGatewayStateConflict) {
+		writeError(w, http.StatusConflict, "state_conflict", "concurrent state update on another replica; retry")
 		return
 	}
 	writeError(w, http.StatusBadRequest, "key_store_error", err.Error())

@@ -130,6 +130,8 @@ func requestFailureCode(err error) string {
 		return "network_proxy_unavailable"
 	case errors.Is(err, errInvalidUpstreamRequest):
 		return "invalid_request"
+	case errors.Is(err, errDNSRebindingBlocked):
+		return "ssrf_blocked"
 	case errors.Is(err, errUpstreamIdleTimeout):
 		return "upstream_idle_timeout"
 	case errors.Is(err, context.Canceled):
@@ -215,7 +217,7 @@ func logIsBackground(event string, fields map[string]any) bool {
 		return false
 	}
 	switch event {
-	case "tool_call_emitted", "key_health_completed", "cooling_keys_recovery_completed", "waf_warmup_succeeded":
+	case "tool_call_emitted", "key_health_completed", "cooling_keys_recovery_completed", "waf_warmup_succeeded", "audit_events_pruned", "gateway_state_synced":
 		return true
 	case "request_completed":
 		path, _ := fields["path"].(string)
@@ -239,6 +241,8 @@ func failureExplanation(code string) string {
 		return "Нет доступного провайдера с нужной моделью и API-протоколом"
 	case "network_proxy_unavailable":
 		return "Назначенный сетевой прокси отключён или отсутствует; прямой выход запрещён"
+	case "ssrf_blocked":
+		return "Целевой адрес заблокирован защитой от SSRF / DNS Rebinding"
 	case "proxy_auth_required":
 		return "Клиентский ключ доступа к gateway отсутствует или невалиден"
 	case "network_proxy_auth":
@@ -310,6 +314,12 @@ func logSummary(event string, fields map[string]any) string {
 		return fmt.Sprintf("Проверка ключей в cooldown: %s проверено · %s восстановлено", value("checked"), value("recovered"))
 	case "cache_hit":
 		return fmt.Sprintf("Ответ из кэша · модель %s (%s)", value("model"), value("cache_key"))
+	case "audit_events_pruned":
+		return fmt.Sprintf("Автоочистка audit_events: удалено %s записей старше %s дн.", value("deleted"), value("retention_days"))
+	case "gateway_state_synced":
+		return fmt.Sprintf("Состояние пула синхронизировано между репликами (ревизия %s)", value("revision"))
+	case "gateway_state_conflict":
+		return "Конфликт ревизий gateway_state между репликами; запущена синхронизация"
 	case "admin_password_changed":
 		return "Пароль администратора изменён; предыдущие сессии отозваны"
 	case "admin_key_updated":

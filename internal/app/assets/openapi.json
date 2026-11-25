@@ -37,6 +37,7 @@
             "enum": [
               "responses",
               "chat-completions",
+              "anthropic",
               "genai"
             ],
             "description": "Create default: responses. Omitted on policy update: preserve current protocol."
@@ -132,6 +133,7 @@
             "enum": [
               "responses",
               "chat-completions",
+              "anthropic",
               "genai"
             ]
           },
@@ -255,6 +257,7 @@
             "enum": [
               "responses",
               "chat-completions",
+              "anthropic",
               "genai"
             ],
             "default": "responses"
@@ -317,6 +320,40 @@
     }
   ],
   "paths": {
+    "/messages": {
+      "post": {
+        "summary": "Anthropic Messages API (native passthrough or translated across Responses, Chat Completions, and GenAI)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "model",
+                  "messages"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Anthropic Message JSON or SSE stream (message_start, content_block_delta, message_delta, message_stop)"
+          }
+        }
+      }
+    },
+    "/messages/count_tokens": {
+      "post": {
+        "summary": "Anthropic Messages input token counter (native upstream or local fallback)",
+        "responses": {
+          "200": {
+            "description": "Estimated or native input_tokens count"
+          }
+        }
+      }
+    },
     "/chat/completions": {
       "post": {
         "summary": "Native Chat Completions, Responses adapter, or Google GenAI, according to selected upstream api_protocol",

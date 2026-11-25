@@ -101,7 +101,11 @@ func (server *proxyServer) authenticateAdmin(r *http.Request) (*adminAccount, er
 		}
 	}
 	if cookie, err := r.Cookie(adminSessionCookie); err == nil {
-		if account := server.keys.browserSessionAccount(cookie.Value, server.cfg.AdminAccounts); account != nil {
+		account := server.keys.browserSessionAccount(cookie.Value, server.cfg.AdminAccounts)
+		if account == nil && server.syncStateIfBehind(r.Context()) {
+			account = server.keys.browserSessionAccount(cookie.Value, server.cfg.AdminAccounts)
+		}
+		if account != nil {
 			if !cookieMutationAllowed(r) {
 				return nil, errAdminCSRF
 			}
