@@ -1,7 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="8" fill="#0b1220"/>
-  <g transform="translate(4 4)" fill="none" stroke="#22c55e" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M12 3 4.5 7.2v9.6L12 21l7.5-4.2V7.2L12 3Z"/>
-    <path d="m4.8 7.4 7.2 4 7.2-4M12 11.4V21"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0f1b2d"/>
+      <stop offset="1" stop-color="#060b16"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="6" y1="4" x2="26" y2="28" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#34d399"/>
+      <stop offset="1" stop-color="#10b981"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="9" fill="url(#bg)"/>
+  <rect x="0.75" y="0.75" width="30.5" height="30.5" rx="8.25" fill="none" stroke="#34d399" stroke-opacity="0.28" stroke-width="1.5"/>
+  <g transform="translate(4 4)" fill="none" stroke="url(#accent)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 2.8 4.4 7.1v9.8L12 21.2l7.6-4.3V7.1L12 2.8Z"/>
+    <path d="m4.7 7.3 7.3 4.1 7.3-4.1M12 11.4V21"/>
   </g>
 </svg>

@@ -1,119 +1,2053 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
 <head><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate icon" href="/favicon.ico">
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>AgentRouter Control Plane</title>
+  <title>AgentRouter · Панель управления</title>
   <style>
-    :root{--bg:#020617;--panel:#0b1220;--panel2:#111a2c;--line:#243249;--text:#f8fafc;--muted:#94a3b8;--green:#22c55e;--green2:#16a34a;--red:#ef4444;--amber:#f59e0b;--blue:#38bdf8;--shadow:0 22px 65px rgba(0,0,0,.32)}
-    *{box-sizing:border-box}html{min-height:100%;background:var(--bg)}body{margin:0;min-height:100vh;color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:radial-gradient(circle at 12% -10%,rgba(34,197,94,.12),transparent 35%),radial-gradient(circle at 96% 0,rgba(56,189,248,.08),transparent 30%),var(--bg)}
-    button,input,select{font:inherit}button{cursor:pointer}.shell{width:min(1180px,calc(100% - 32px));margin:auto;padding:26px 0 64px}.topbar{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:28px}.brand{display:flex;align-items:center;gap:12px}.logo{width:38px;height:38px;display:grid;place-items:center;border:1px solid rgba(34,197,94,.35);border-radius:11px;background:linear-gradient(145deg,rgba(34,197,94,.18),rgba(34,197,94,.04));color:var(--green)}.brand h1{font-size:16px;line-height:1.1;margin:0;font-weight:700;letter-spacing:-.01em}.brand p{font-size:12px;color:var(--muted);margin:5px 0 0}.top-actions{display:flex;align-items:center;gap:9px}.btn{border:1px solid var(--line);background:#0e1728;color:var(--text);border-radius:9px;padding:9px 13px;font-weight:600;font-size:13px;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:38px;transition:border-color .18s,background .18s,opacity .18s}.btn:hover{border-color:#3b4d68;background:#152137}.btn:focus-visible,.input:focus-visible,.switch:focus-visible,.dropdown-trigger:focus-visible,.check-input:focus-visible{outline:2px solid var(--blue);outline-offset:2px}.btn.primary{background:var(--green);border-color:var(--green);color:#03120a}.btn.primary:hover{background:#2bd267}.btn.danger{color:#fca5a5}.btn.icon{width:38px;padding:0}.btn:disabled{cursor:not-allowed;opacity:.5}.icon-svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-    .hero{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;margin-bottom:19px}.hero h2{font-size:27px;letter-spacing:-.035em;margin:0 0 7px}.hero p{margin:0;color:var(--muted);font-size:14px}.status-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}.stat{position:relative;border:1px solid var(--line);background:linear-gradient(150deg,rgba(17,26,44,.95),rgba(9,16,29,.95));border-radius:12px;padding:15px 16px;box-shadow:0 10px 35px rgba(0,0,0,.12)}.stat-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700}.stat-value{margin-top:10px;display:flex;align-items:center;gap:8px;font-size:15px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dot{width:8px;height:8px;border-radius:999px;background:var(--muted);box-shadow:0 0 0 4px rgba(148,163,184,.08)}.dot.good{background:var(--green);box-shadow:0 0 0 4px rgba(34,197,94,.12)}.dot.warn{background:var(--amber);box-shadow:0 0 0 4px rgba(245,158,11,.12)}.dropdown{position:relative;margin-top:7px}.dropdown-trigger{width:100%;border:0;background:transparent;color:var(--text);padding:2px 0;display:flex;align-items:center;justify-content:space-between;gap:8px;font-weight:650;text-align:left}.chevron{width:16px;height:16px;transition:transform .18s}.dropdown.open .chevron{transform:rotate(180deg)}.dropdown-menu{position:absolute;z-index:20;top:calc(100% + 9px);right:-7px;min-width:190px;padding:6px;border:1px solid var(--line);border-radius:11px;background:#101a2c;box-shadow:0 20px 55px rgba(0,0,0,.48);opacity:0;visibility:hidden;transform:translateY(-5px);transition:opacity .16s,transform .16s,visibility .16s}.dropdown.open .dropdown-menu{opacity:1;visibility:visible;transform:none}.dropdown-option{width:100%;border:0;background:transparent;color:#dbeafe;padding:9px 10px;border-radius:7px;text-align:left;font-size:12px}.dropdown-option:hover,.dropdown-option.active{background:rgba(34,197,94,.11);color:#86efac}
-    .card{border:1px solid var(--line);background:rgba(9,16,29,.94);border-radius:14px;overflow:hidden;box-shadow:var(--shadow)}.card-head{padding:16px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px}.card-title{display:flex;align-items:center;gap:10px}.card-title h3{font-size:14px;margin:0}.count{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 7px}.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;min-width:780px}th{text-align:left;padding:11px 18px;background:#0c1424;color:#8090a8;font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:700}td{padding:14px 18px;border-top:1px solid rgba(36,50,73,.68);font-size:13px;vertical-align:middle}tbody tr{transition:background .16s}tbody tr:hover{background:rgba(30,41,59,.36)}.key-name{font-weight:650;margin-bottom:5px}.key-id{color:#64748b;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px}.mask{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:#cbd5e1}.badge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:4px 8px;font-size:11px;font-weight:650;border:1px solid}.badge.on{color:#86efac;border-color:rgba(34,197,94,.28);background:rgba(34,197,94,.08)}.badge.off{color:#94a3b8;border-color:#334155;background:rgba(51,65,85,.16)}.badge.cool{color:#fcd34d;border-color:rgba(245,158,11,.3);background:rgba(245,158,11,.08)}.muted{color:var(--muted)}.actions{display:flex;justify-content:flex-end;gap:6px}.switch{position:relative;width:44px;height:25px;border:1px solid #40516b;border-radius:999px;background:linear-gradient(180deg,#26364d,#1c293c);padding:3px;box-shadow:inset 0 1px 3px rgba(0,0,0,.35);transition:background .2s,border-color .2s,box-shadow .2s}.switch:hover{border-color:#5b708f}.switch span{display:block;width:17px;height:17px;border-radius:50%;background:linear-gradient(180deg,#f1f5f9,#aebdd0);box-shadow:0 2px 5px rgba(0,0,0,.45);transition:transform .2s cubic-bezier(.2,.8,.2,1),background .2s}.switch.on{border-color:#22c55e;background:linear-gradient(180deg,#20b95a,#12813d);box-shadow:inset 0 1px 2px rgba(0,0,0,.25),0 0 0 3px rgba(34,197,94,.08)}.switch.on span{transform:translateX(19px);background:white}.switch:disabled{cursor:not-allowed;opacity:.5}.empty{padding:55px 24px;text-align:center}.empty-icon{width:44px;height:44px;margin:0 auto 14px;border:1px solid var(--line);border-radius:12px;display:grid;place-items:center;color:var(--muted)}.empty h3{font-size:15px;margin:0 0 7px}.empty p{color:var(--muted);font-size:13px;margin:0 0 17px}
-    .dashboard-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}.chart-list{padding:16px 18px;display:grid;gap:13px}.chart-row{display:grid;grid-template-columns:110px 1fr auto;gap:10px;align-items:center;font-size:12px}.chart-name{overflow:hidden;text-overflow:ellipsis}.bar-track{height:8px;border-radius:99px;background:#18253a;overflow:hidden}.bar-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,#16a34a,#4ade80);min-width:2px}.log-list{height:290px;overflow:auto;padding:10px 14px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}.log-line{padding:7px 5px;border-bottom:1px solid rgba(36,50,73,.55);display:grid;grid-template-columns:75px 52px 1fr;gap:8px}.log-level-warn{color:#fcd34d}.log-level-error{color:#fca5a5}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.hero-actions{display:flex;gap:8px;flex-wrap:wrap}@media(max-width:900px){.dashboard-grid{grid-template-columns:1fr}}@media(max-width:560px){.form-grid{grid-template-columns:1fr}}
-    dialog{width:min(470px,calc(100% - 28px));border:1px solid var(--line);border-radius:15px;padding:0;color:var(--text);background:#0b1322;box-shadow:0 30px 90px rgba(0,0,0,.6)}dialog::backdrop{background:rgba(0,4,12,.72);backdrop-filter:blur(4px)}.modal-head{padding:18px 20px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}.modal-head h3{margin:0;font-size:16px}.modal-body{padding:19px 20px}.field{margin-bottom:16px}.field label{display:block;font-size:12px;font-weight:650;margin-bottom:7px;color:#dbeafe}.input{width:100%;border:1px solid var(--line);background:#07101e;color:var(--text);border-radius:9px;padding:10px 11px;outline:none}.input:focus{border-color:#3b82f6}.help{font-size:11px;color:var(--muted);margin-top:6px}.check-row{display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer;user-select:none}.check-input{appearance:none;-webkit-appearance:none;width:20px;height:20px;margin:0;border:1px solid #475b78;border-radius:6px;background:linear-gradient(180deg,#17243a,#0d1728);display:grid;place-items:center;transition:background .18s,border-color .18s,box-shadow .18s}.check-input:after{content:"";width:8px;height:4px;border-left:2px solid white;border-bottom:2px solid white;transform:rotate(-45deg) scale(0);transition:transform .16s}.check-input:checked{border-color:#22c55e;background:linear-gradient(145deg,#22c55e,#15803d);box-shadow:0 0 0 3px rgba(34,197,94,.1)}.check-input:checked:after{transform:rotate(-45deg) scale(1)}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}.login{position:fixed;inset:0;z-index:30;display:grid;place-items:center;padding:20px;background:radial-gradient(circle at 50% 30%,rgba(34,197,94,.09),transparent 32%),rgba(2,6,23,.97)}.login.hidden{display:none}.login-card{width:min(410px,100%);border:1px solid var(--line);border-radius:16px;background:#0a1220;padding:28px;box-shadow:var(--shadow)}.login-card .logo{margin-bottom:18px}.login-card h2{font-size:21px;margin:0 0 8px}.login-card p{font-size:13px;line-height:1.55;color:var(--muted);margin:0 0 20px}.login-error{min-height:18px;color:#fca5a5;font-size:12px;margin-top:9px}.toast{position:fixed;right:20px;bottom:20px;z-index:50;max-width:380px;padding:11px 14px;border:1px solid var(--line);border-radius:10px;background:#111c2f;color:var(--text);font-size:13px;box-shadow:var(--shadow);opacity:0;transform:translateY(10px);pointer-events:none;transition:.2s}.toast.show{opacity:1;transform:none}.toast.error{border-color:rgba(239,68,68,.45);color:#fecaca}.skeleton{height:54px;margin:12px 18px;border-radius:8px;background:linear-gradient(90deg,#111a2c,#18243a,#111a2c);background-size:200% 100%;animation:shine 1.2s infinite}@keyframes shine{to{background-position:-200% 0}}@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}@media(max-width:800px){.status-row{grid-template-columns:repeat(2,1fr)}.hero{align-items:flex-start;flex-direction:column}.shell{width:min(100% - 20px,1180px);padding-top:16px}.brand p{display:none}}@media(max-width:480px){.status-row{grid-template-columns:1fr}.topbar{align-items:flex-start}.top-actions .btn span{display:none}.hero h2{font-size:23px}}
-    .nav{display:flex;gap:6px;flex-wrap:wrap;padding:7px;border:1px solid var(--line);border-radius:13px;background:var(--panel);margin-bottom:26px}.nav button{border:0;border-radius:8px;padding:10px 16px;color:var(--muted);background:transparent;font-weight:600;font-size:13px}.nav button[aria-current="page"]{background:#183129;color:#86efac}.nav button:hover{color:var(--text)}[hidden]{display:none!important}.page-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px}.page-head h2{font-size:25px;margin:0 0 6px;letter-spacing:-.03em}.page-head p{font-size:13px;color:var(--muted);margin:0;line-height:1.6}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.toolbar .input{width:230px}.pagination{display:flex;gap:12px;align-items:center;justify-content:flex-end;padding:14px 18px;border-top:1px solid var(--line);font-size:12px}.route-label{font-size:11px;color:var(--blue);margin-top:6px}.key-name{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.key-id{display:none}.summary-note{padding:20px;line-height:1.7;font-size:13px;color:var(--muted)}details{border:1px solid var(--line);border-radius:10px;margin:18px 0;padding:12px}summary{cursor:pointer;font-size:12px;font-weight:600}details .field:first-of-type{margin-top:16px}dialog{width:min(560px,calc(100% - 28px));max-height:90vh}dialog .modal-body{max-height:75vh;overflow:auto}.log-list{height:55vh}.dashboard-grid{grid-template-columns:1fr}.card{box-shadow:0 12px 32px rgba(0,0,0,.16)}.nav button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}@media(max-width:650px){.page-head{align-items:flex-start;flex-direction:column}.nav button{flex:1;padding:10px}.toolbar .input{width:100%}}
-    .shell > section{min-width:0}.page-head > div{min-width:0}.page-head p{overflow-wrap:anywhere}.card{max-width:100%}@media(max-width:650px){.topbar{flex-wrap:wrap}.brand{min-width:0}.brand h1{font-size:14px}.nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}.nav button{min-width:0;padding:10px 4px}.page-head{align-items:stretch}.page-head p{white-space:normal}.summary-note{padding:12px 4px}.card-head{flex-wrap:wrap}.actions{flex-wrap:wrap}.shell{width:calc(100% - 20px)}}
-    .provider-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,350px),1fr));gap:16px}.provider-body{padding:18px}.provider-endpoint{overflow-wrap:anywhere;font-size:12px;color:var(--muted);line-height:1.7}.model-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px;max-height:180px;overflow:auto}.model-chip{border:1px solid var(--line);border-radius:7px;padding:5px 8px;background:var(--panel2);font-family:ui-monospace,monospace;font-size:11px;overflow-wrap:anywhere}.provider-grid .card-head h3{margin:0;font-size:15px}textarea.input{resize:vertical;min-height:130px;font-family:ui-monospace,monospace}
-    .log-toolbar{justify-content:flex-start;flex-wrap:wrap}.log-toolbar .input{width:auto;max-width:100%}.log-toolbar input[type="search"]{flex:1;min-width:220px}.log-toolbar .check-row{font-size:12px}.log-state{padding:10px 18px;margin:0;border-bottom:1px solid var(--line)}.log-entry{border:0;border-bottom:1px solid var(--line);border-radius:0;margin:0;padding:0}.log-entry summary{list-style:none;display:grid;grid-template-columns:72px 68px minmax(0,1fr);gap:12px;padding:13px 6px;font-size:12px;line-height:1.6}.log-entry summary::marker{display:none}.log-entry summary:before{content:none}.log-time{color:var(--muted);font-variant-numeric:tabular-nums}.log-content{min-width:0}.log-summary{color:var(--text);font-weight:600;overflow-wrap:anywhere}.log-meta{color:var(--muted);font-size:11px;overflow-wrap:anywhere}.log-severity{font-size:10px;text-transform:uppercase}.log-entry.log-level-error .log-summary{color:#fca5a5}.log-entry.log-level-warn .log-summary{color:#fde68a}.log-details{padding:0 18px 16px 158px}.log-details dl{display:grid;grid-template-columns:125px minmax(0,1fr);gap:7px;margin:12px 0;font-size:12px}.log-details dt{color:var(--muted)}.log-details dd{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}.log-details button{font-size:11px}.log-list{font-family:inherit;padding:0 12px}.log-entry[open]{background:var(--panel2)}@media(max-width:650px){.log-entry summary{grid-template-columns:60px minmax(0,1fr);gap:6px}.log-severity{grid-column:1}.log-content{grid-column:2;grid-row:1 / span 2}.log-details{padding:0 8px 14px}.log-details dl{grid-template-columns:90px minmax(0,1fr)}.log-toolbar .input{width:100%}}
-    .login-card{width:min(450px,100%)}.password-input{position:relative}.password-input input{padding-right:82px}.password-toggle{position:absolute;right:8px;top:8px;bottom:8px;border:0;border-left:1px solid var(--line);background:transparent;color:var(--muted);font-size:11px;padding-left:9px;cursor:pointer}.password-toggle:hover{color:var(--green)}select.input{appearance:none;padding-right:38px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='m5 7 5 5 5-5' fill='none' stroke='%2394a3b8' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;background-size:18px;cursor:pointer;transition:border-color .18s,box-shadow .18s}select.input:hover{border-color:#4b647e;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='m5 7 5 5 5-5' fill='none' stroke='%2322c55e' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")}select.input:focus-visible{box-shadow:0 0 0 3px rgba(56,189,248,.12)}.dropdown-trigger{border:1px solid transparent;border-radius:8px;padding:6px 8px;cursor:pointer;transition:background .18s,border-color .18s}.dropdown-trigger .chevron{width:24px;height:24px;padding:4px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);flex-shrink:0}.dropdown-trigger:hover,.dropdown.open .dropdown-trigger{background:rgba(34,197,94,.06);border-color:rgba(34,197,94,.2)}.dropdown-trigger:hover .chevron,.dropdown.open .chevron{color:var(--green);border-color:rgba(34,197,94,.4)}.dropdown-menu{right:0;top:calc(100% + 6px)}.password-toggle:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
-    .session-check{text-align:center;color:var(--muted);font-size:13px}.session-spinner{width:28px;height:28px;margin:0 auto 16px;border:2px solid var(--line);border-top-color:var(--green);border-radius:50%;animation:session-spin .8s linear infinite}@keyframes session-spin{to{transform:rotate(360deg)}}
+    :root {
+      color-scheme: dark;
+      --bg: #050811;
+      --bg-elev: #0a101f;
+      --panel: rgba(12, 19, 34, 0.86);
+      --panel-solid: #0c1424;
+      --panel2: #121d33;
+      --panel3: #172540;
+      --line: rgba(148, 163, 184, 0.16);
+      --line-strong: rgba(148, 163, 184, 0.28);
+      --text: #f8fafc;
+      --text-soft: #dbeafe;
+      --muted: #94a3b8;
+      --green: #10b981;
+      --green-bright: #22c55e;
+      --green-ink: #02180e;
+      --red: #ef4444;
+      --amber: #f59e0b;
+      --blue: #38bdf8;
+      --violet: #a78bfa;
+      --autofill-bg: #0c192c;
+      --autofill-ring: #38bdf8;
+      --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.24);
+      --shadow: 0 20px 55px rgba(0, 0, 0, 0.42);
+      --shadow-lg: 0 32px 90px rgba(0, 0, 0, 0.68);
+      --radius-sm: 9px;
+      --radius-md: 13px;
+      --radius-lg: 18px;
+    }
+    * { box-sizing: border-box; }
+    html {
+      min-height: 100%;
+      background: var(--bg);
+      accent-color: var(--green-bright);
+      scrollbar-color: #334155 #080e1c;
+    }
+    ::selection {
+      background: rgba(16, 185, 129, 0.28);
+      color: #ffffff;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", sans-serif;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      background:
+        radial-gradient(900px 440px at 10% -8%, rgba(16, 185, 129, 0.13), transparent 58%),
+        radial-gradient(820px 420px at 92% -6%, rgba(56, 189, 248, 0.10), transparent 54%),
+        radial-gradient(700px 500px at 50% 108%, rgba(99, 102, 241, 0.06), transparent 60%),
+        var(--bg);
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      background-image:
+        linear-gradient(rgba(148, 163, 184, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(148, 163, 184, 0.035) 1px, transparent 1px);
+      background-size: 40px 40px;
+      mask-image: radial-gradient(ellipse 85% 60% at 50% 0%, #000 25%, transparent 85%);
+      -webkit-mask-image: radial-gradient(ellipse 85% 60% at 50% 0%, #000 25%, transparent 85%);
+    }
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; }
+    [hidden] { display: none !important; }
+
+    /* Focus rings */
+    .btn:focus-visible,
+    .input:focus-visible,
+    .switch:focus-visible,
+    .dropdown-trigger:focus-visible,
+    .check-input:focus-visible,
+    .nav button:focus-visible,
+    .password-toggle:focus-visible,
+    .table-wrap:focus-visible,
+    .endpoint-copy:focus-visible {
+      outline: 2px solid var(--blue);
+      outline-offset: 2px;
+    }
+
+    /* Autofill override without layout shift */
+    input:is(:autofill, :-webkit-autofill) {
+      box-shadow:
+        inset 0 0 0 2px var(--autofill-ring),
+        inset 0 0 0 100vmax var(--autofill-bg);
+      -webkit-text-fill-color: var(--text);
+      caret-color: var(--text);
+      border-color: var(--autofill-ring);
+    }
+    input:is(:autofill, :-webkit-autofill):focus-visible {
+      outline: 3px solid var(--green-bright);
+      outline-offset: 2px;
+    }
+
+    /* Shell & Topbar */
+    .shell {
+      position: relative;
+      z-index: 1;
+      width: min(1220px, calc(100% - 36px));
+      margin: 0 auto;
+      padding: 22px 0 72px;
+    }
+    .shell > section { min-width: 0; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 13px 16px;
+      margin-bottom: 18px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(10, 17, 31, 0.78);
+      backdrop-filter: blur(16px);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), var(--shadow-sm);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 13px;
+      min-width: 0;
+    }
+    .logo {
+      width: 40px;
+      height: 40px;
+      flex-shrink: 0;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(52, 211, 153, 0.36);
+      border-radius: 12px;
+      background: linear-gradient(145deg, rgba(16, 185, 129, 0.22), rgba(16, 185, 129, 0.04));
+      color: #34d399;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 8px 22px rgba(16, 185, 129, 0.16);
+    }
+    .brand h1 {
+      font-size: 15.5px;
+      line-height: 1.15;
+      margin: 0;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .brand p {
+      font-size: 12px;
+      color: var(--muted);
+      margin: 3px 0 0;
+    }
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    /* Buttons */
+    .btn {
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(22, 33, 54, 0.92), rgba(13, 21, 37, 0.96));
+      color: var(--text);
+      border-radius: 10px;
+      padding: 8px 13px;
+      font-weight: 600;
+      font-size: 13px;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-height: 38px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      transition: border-color 0.16s, background 0.16s, transform 0.12s, box-shadow 0.16s, opacity 0.16s;
+    }
+    .btn:hover:not(:disabled) {
+      border-color: var(--line-strong);
+      background: linear-gradient(180deg, rgba(30, 44, 70, 0.95), rgba(18, 28, 48, 0.98));
+    }
+    .btn:active:not(:disabled) { transform: translateY(1px); }
+    .btn.primary {
+      background: linear-gradient(180deg, #22c55e, #10b981);
+      border-color: #22c55e;
+      color: var(--green-ink);
+      font-weight: 700;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 8px 22px rgba(16, 185, 129, 0.24);
+    }
+    .btn.primary:hover:not(:disabled) {
+      background: linear-gradient(180deg, #34d399, #16a34a);
+      border-color: #34d399;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.34), 0 10px 26px rgba(16, 185, 129, 0.32);
+    }
+    .btn.danger {
+      color: #fca5a5;
+      border-color: rgba(239, 68, 68, 0.24);
+    }
+    .btn.danger:hover:not(:disabled) {
+      background: rgba(127, 29, 29, 0.32);
+      border-color: rgba(248, 113, 113, 0.45);
+      color: #fecaca;
+    }
+    .btn.icon {
+      width: 38px;
+      padding: 0;
+    }
+    .btn.sm {
+      min-height: 32px;
+      padding: 5px 10px;
+      font-size: 12px;
+      border-radius: 8px;
+    }
+    .btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.46;
+    }
+    .icon-svg {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.85;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    /* Navigation Tabs */
+    .nav {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(10, 16, 30, 0.84);
+      backdrop-filter: blur(12px);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      margin-bottom: 26px;
+    }
+    .nav button {
+      border: 1px solid transparent;
+      border-radius: 10px;
+      padding: 9px 14px;
+      color: var(--muted);
+      background: transparent;
+      font-weight: 600;
+      font-size: 13px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: color 0.16s, background 0.16s, border-color 0.16s, box-shadow 0.16s;
+    }
+    .nav button:hover {
+      color: var(--text);
+      background: rgba(148, 163, 184, 0.06);
+    }
+    .nav button[aria-current="page"] {
+      background: linear-gradient(180deg, rgba(16, 185, 129, 0.18), rgba(16, 185, 129, 0.08));
+      border-color: rgba(52, 211, 153, 0.3);
+      color: #6ee7b7;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 4px 14px rgba(16, 185, 129, 0.12);
+    }
+
+    /* Page Headings & Toolbars */
+    .page-head {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    .page-head > div { min-width: 0; }
+    .page-head h2 {
+      font-size: 24px;
+      font-weight: 750;
+      margin: 0 0 5px;
+      letter-spacing: -0.03em;
+    }
+    .page-head p {
+      font-size: 13.5px;
+      color: var(--muted);
+      margin: 0;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+    }
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    /* KPI Status Cards */
+    .status-row {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 13px;
+      margin-bottom: 16px;
+    }
+    .stat {
+      position: relative;
+      border: 1px solid var(--line);
+      background: linear-gradient(160deg, rgba(17, 27, 47, 0.92), rgba(9, 15, 28, 0.95));
+      border-radius: 15px;
+      padding: 16px 18px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), var(--shadow-sm);
+      transition: border-color 0.18s;
+    }
+    .stat:hover { border-color: rgba(148, 163, 184, 0.26); }
+    .stat:has(.dropdown.open) { z-index: 30; }
+    .stat-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .stat-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .stat-icon {
+      width: 26px;
+      height: 26px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: rgba(148, 163, 184, 0.08);
+      color: #94a3b8;
+    }
+    .stat-value {
+      margin-top: 11px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 15.5px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      flex-shrink: 0;
+      border-radius: 999px;
+      background: var(--muted);
+      box-shadow: 0 0 0 4px rgba(148, 163, 184, 0.1);
+    }
+    .dot.good {
+      background: var(--green-bright);
+      box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.16);
+    }
+    .dot.warn {
+      background: var(--amber);
+      box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.16);
+    }
+
+    /* Routing Mode Dropdown (chevron keeps exact border-radius: 7px) */
+    .dropdown { position: relative; margin-top: 7px; }
+    .dropdown-trigger {
+      width: 100%;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text);
+      padding: 5px 7px;
+      margin: 0 -7px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 15px;
+      font-weight: 700;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.18s, border-color 0.18s;
+    }
+    .dropdown-trigger .chevron {
+      width: 24px;
+      height: 24px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel2);
+      flex-shrink: 0;
+      transition: transform 0.18s, color 0.18s, border-color 0.18s;
+    }
+    .dropdown.open .chevron { transform: rotate(180deg); }
+    .dropdown-trigger:hover,
+    .dropdown.open .dropdown-trigger {
+      background: rgba(16, 185, 129, 0.08);
+      border-color: rgba(52, 211, 153, 0.24);
+    }
+    .dropdown-trigger:hover .chevron,
+    .dropdown.open .chevron {
+      color: var(--green-bright);
+      border-color: rgba(52, 211, 153, 0.45);
+    }
+    .dropdown-menu {
+      position: absolute;
+      z-index: 25;
+      right: 0;
+      top: calc(100% + 6px);
+      min-width: 210px;
+      padding: 6px;
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      background: #0e182b;
+      box-shadow: var(--shadow-lg);
+      opacity: 0;
+      visibility: hidden;
+      transform: translateY(-6px);
+      transition: opacity 0.16s, transform 0.16s, visibility 0.16s;
+    }
+    .dropdown.open .dropdown-menu {
+      opacity: 1;
+      visibility: visible;
+      transform: none;
+    }
+    .dropdown-option {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      color: var(--text-soft);
+      padding: 9px 11px;
+      border-radius: 8px;
+      text-align: left;
+      font-size: 12.5px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .dropdown-option:hover,
+    .dropdown-option.active {
+      background: rgba(16, 185, 129, 0.14);
+      color: #6ee7b7;
+    }
+
+    /* Overview Grid & Quick Endpoints */
+    .overview-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 10px 15px;
+      margin-bottom: 16px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(11, 18, 32, 0.65);
+      font-size: 12.5px;
+    }
+    .overview-meta p { margin: 0; }
+    .overview-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 16px;
+    }
+    .endpoint-list {
+      padding: 16px 18px;
+      display: grid;
+      gap: 10px;
+    }
+    .endpoint-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: rgba(7, 12, 23, 0.72);
+    }
+    .endpoint-info { min-width: 0; }
+    .endpoint-tag {
+      font-size: 10.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+    .endpoint-url {
+      margin-top: 3px;
+      font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 12px;
+      color: #e2e8f0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .endpoint-copy {
+      flex-shrink: 0;
+      border: 1px solid var(--line);
+      background: var(--panel2);
+      color: var(--text-soft);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 11.5px;
+      font-weight: 600;
+      transition: border-color 0.15s, background 0.15s, color 0.15s;
+    }
+    .endpoint-copy:hover {
+      border-color: rgba(52, 211, 153, 0.4);
+      color: #6ee7b7;
+    }
+    .cache-strip {
+      padding: 12px 18px 16px;
+      border-top: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    /* Cards & Responsive Sticky Tables */
+    .card {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      backdrop-filter: blur(12px);
+      border-radius: 16px;
+      overflow: hidden;
+      max-width: 100%;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), var(--shadow-sm);
+    }
+    .card-head {
+      padding: 15px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: rgba(13, 21, 38, 0.55);
+    }
+    .card-head h3, .card-title h3 {
+      font-size: 14px;
+      font-weight: 700;
+      margin: 0;
+      letter-spacing: -0.01em;
+    }
+    .card-title {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+    .count {
+      font-size: 11px;
+      font-weight: 700;
+      color: #cbd5e1;
+      background: rgba(148, 163, 184, 0.1);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-variant-numeric: tabular-nums;
+    }
+    .table-wrap {
+      overflow: auto;
+      max-inline-size: 100%;
+    }
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      min-width: 780px;
+    }
+    thead {
+      position: sticky;
+      inset-block-start: 0;
+      z-index: 1;
+    }
+    th {
+      text-align: left;
+      padding: 11px 18px;
+      background: #0a1222;
+      border-bottom: 1px solid var(--line);
+      color: #8fa1b9;
+      font-size: 10.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 700;
+    }
+    td {
+      padding: 14px 18px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.09);
+      font-size: 13px;
+      vertical-align: middle;
+    }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr { transition: background 0.14s; }
+    tbody tr:hover { background: rgba(30, 44, 72, 0.34); }
+
+    .key-name {
+      font-weight: 650;
+      margin-bottom: 4px;
+      max-width: 280px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .key-id { display: none; }
+    .mask {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(148, 163, 184, 0.14);
+      font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 12px;
+      color: #cbd5e1;
+    }
+    .route-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      color: var(--blue);
+      margin-top: 5px;
+      font-weight: 500;
+    }
+
+    /* Badges & Protocol Pills */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-size: 11px;
+      font-weight: 650;
+      border: 1px solid;
+      white-space: nowrap;
+    }
+    .badge.on {
+      color: #6ee7b7;
+      border-color: rgba(16, 185, 129, 0.32);
+      background: rgba(16, 185, 129, 0.1);
+    }
+    .badge.off {
+      color: #94a3b8;
+      border-color: rgba(100, 116, 139, 0.35);
+      background: rgba(51, 65, 85, 0.2);
+    }
+    .badge.cool {
+      color: #fde68a;
+      border-color: rgba(245, 158, 11, 0.34);
+      background: rgba(245, 158, 11, 0.1);
+    }
+    .proto-pill {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-size: 10.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      background: rgba(56, 189, 248, 0.1);
+      color: #7dd3fc;
+      border: 1px solid rgba(56, 189, 248, 0.22);
+    }
+    .proto-pill.proto-anthropic {
+      background: rgba(245, 158, 11, 0.12);
+      color: #fcd34d;
+      border-color: rgba(245, 158, 11, 0.26);
+    }
+    .proto-pill.proto-genai {
+      background: rgba(167, 139, 250, 0.12);
+      color: #c4b5fd;
+      border-color: rgba(167, 139, 250, 0.26);
+    }
+    .proto-pill.proto-chat-completions {
+      background: rgba(16, 185, 129, 0.11);
+      color: #6ee7b7;
+      border-color: rgba(16, 185, 129, 0.24);
+    }
+
+    .muted { color: var(--muted); }
+    .actions {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* Tactile Switch */
+    .switch {
+      position: relative;
+      width: 44px;
+      height: 25px;
+      flex-shrink: 0;
+      border: 1px solid #475569;
+      border-radius: 999px;
+      background: linear-gradient(180deg, #1e293b, #0f172a);
+      padding: 3px;
+      box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.45);
+      transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
+    }
+    .switch:hover:not(:disabled) { border-color: #64748b; }
+    .switch span {
+      display: block;
+      width: 17px;
+      height: 17px;
+      border-radius: 50%;
+      background: linear-gradient(180deg, #f8fafc, #cbd5e1);
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
+      transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.2s;
+    }
+    .switch.on {
+      border-color: #22c55e;
+      background: linear-gradient(180deg, #22c55e, #15803d);
+      box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25), 0 0 0 3px rgba(34, 197, 94, 0.12);
+    }
+    .switch.on span {
+      transform: translateX(19px);
+      background: #ffffff;
+    }
+    .switch:disabled { cursor: not-allowed; opacity: 0.48; }
+
+    /* Empty States & Pagination */
+    .empty {
+      padding: 52px 24px;
+      text-align: center;
+    }
+    .empty-icon {
+      width: 48px;
+      height: 48px;
+      margin: 0 auto 14px;
+      border: 1px solid var(--line-strong);
+      border-radius: 14px;
+      background: rgba(15, 23, 42, 0.7);
+      display: grid;
+      place-items: center;
+      color: #6ee7b7;
+    }
+    .empty h3 { font-size: 15.5px; margin: 0 0 6px; }
+    .empty p { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+    .pagination {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 13px 18px;
+      border-top: 1px solid var(--line);
+      font-size: 12px;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .summary-note {
+      padding: 14px 4px 0;
+      line-height: 1.65;
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+
+    /* Usage Chart */
+    .chart-list {
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+    .chart-row {
+      display: grid;
+      grid-template-columns: minmax(95px, 140px) 1fr auto;
+      gap: 12px;
+      align-items: center;
+      font-size: 12.5px;
+      font-variant-numeric: tabular-nums;
+    }
+    .chart-name {
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .bar-track {
+      height: 9px;
+      border-radius: 99px;
+      background: rgba(30, 41, 59, 0.75);
+      border: 1px solid rgba(148, 163, 184, 0.1);
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 99px;
+      background: linear-gradient(90deg, #10b981, #34d399, #38bdf8);
+      min-width: 3px;
+    }
+    .chart-stat {
+      color: #cbd5e1;
+      font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+      font-size: 11.5px;
+    }
+
+    /* Providers Grid */
+    .provider-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 350px), 1fr));
+      gap: 16px;
+    }
+    .provider-grid .card-head h3 { margin: 0; font-size: 15px; }
+    .provider-body { padding: 18px; }
+    .provider-endpoint {
+      overflow-wrap: anywhere;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.75;
+    }
+    .provider-url {
+      display: inline-block;
+      font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+      color: #dbeafe;
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    .model-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 14px;
+      max-height: 180px;
+      overflow: auto;
+    }
+    .model-chip {
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 8px;
+      padding: 4px 9px;
+      background: rgba(18, 29, 51, 0.85);
+      color: #e2e8f0;
+      font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+
+    /* Live Events Journal */
+    .log-search-landmark { display: contents; }
+    .log-toolbar {
+      justify-content: flex-start;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .log-toolbar .input { width: auto; max-width: 100%; }
+    .log-toolbar input[type="search"] { flex: 1; min-width: 220px; }
+    .log-toolbar .check-row { font-size: 12.5px; }
+    .log-state {
+      padding: 10px 18px;
+      margin: 0;
+      border-bottom: 1px solid var(--line);
+      background: rgba(7, 12, 23, 0.55);
+      font-variant-numeric: tabular-nums;
+    }
+    .log-list {
+      height: 56vh;
+      overflow: auto;
+      padding: 0;
+    }
+    .log-entry {
+      border: 0;
+      border-left: 3px solid transparent;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+      border-radius: 0;
+      margin: 0;
+      padding: 0;
+      transition: background 0.14s;
+    }
+    .log-entry:hover { background: rgba(30, 41, 59, 0.28); }
+    .log-entry.log-level-warn { border-left-color: var(--amber); }
+    .log-entry.log-level-error { border-left-color: var(--red); }
+    .log-entry summary {
+      list-style: none;
+      display: grid;
+      grid-template-columns: 76px 76px minmax(0, 1fr);
+      gap: 12px;
+      align-items: baseline;
+      padding: 13px 18px;
+      font-size: 12.5px;
+      line-height: 1.55;
+      cursor: pointer;
+    }
+    .log-entry summary::-webkit-details-marker,
+    .log-entry summary::marker { display: none; }
+    .log-entry summary:before { content: none; }
+    .log-time {
+      color: var(--muted);
+      font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+      font-size: 11.5px;
+      font-variant-numeric: tabular-nums;
+    }
+    .log-severity {
+      display: inline-block;
+      text-align: center;
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      background: rgba(148, 163, 184, 0.12);
+      color: #cbd5e1;
+    }
+    .log-entry.log-level-warn .log-severity {
+      background: rgba(245, 158, 11, 0.15);
+      color: #fde68a;
+    }
+    .log-entry.log-level-error .log-severity {
+      background: rgba(239, 68, 68, 0.16);
+      color: #fca5a5;
+    }
+    .log-content { min-width: 0; }
+    .log-summary {
+      color: var(--text);
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+    .log-entry.log-level-error .log-summary { color: #fca5a5; }
+    .log-entry.log-level-warn .log-summary { color: #fde68a; }
+    .log-meta {
+      color: var(--muted);
+      font-size: 11.5px;
+      margin-top: 2px;
+      overflow-wrap: anywhere;
+    }
+    .log-details {
+      padding: 4px 18px 16px 176px;
+    }
+    .log-details dl {
+      display: grid;
+      grid-template-columns: 140px minmax(0, 1fr);
+      gap: 7px 12px;
+      margin: 12px 0 4px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: rgba(6, 11, 21, 0.72);
+      border: 1px solid var(--line);
+      font-size: 12px;
+    }
+    .log-details dt { color: var(--muted); font-weight: 500; }
+    .log-details dd {
+      margin: 0;
+      font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+      font-size: 11.5px;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+    .log-details button { font-size: 11.5px; }
+    .log-entry[open] { background: rgba(18, 29, 51, 0.65); }
+
+    /* Forms & Inputs */
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .field { margin-bottom: 15px; }
+    .field label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12.5px;
+      font-weight: 650;
+      margin-bottom: 6px;
+      color: var(--text-soft);
+    }
+    .input {
+      width: 100%;
+      min-height: 41px;
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      background: #070d1a;
+      color: var(--text);
+      border-radius: 10px;
+      padding: 9px 12px;
+      font-size: 13.5px;
+      transition: border-color 0.16s, box-shadow 0.16s, background 0.16s;
+    }
+    .input::placeholder { color: #64748b; }
+    .input:hover:not(:disabled) { border-color: rgba(148, 163, 184, 0.38); }
+    .input:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14);
+    }
+    .input:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    input:not([type="range"]):user-invalid,
+    textarea:user-invalid {
+      border-color: rgba(239, 68, 68, 0.65);
+    }
+    textarea.input {
+      resize: vertical;
+      min-height: 128px;
+      font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+      font-size: 12.5px;
+    }
+    select.input {
+      appearance: none;
+      padding-right: 38px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='m5 7 5 5 5-5' fill='none' stroke='%2394a3b8' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 11px center;
+      background-size: 17px;
+      cursor: pointer;
+    }
+    select.input:hover {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='m5 7 5 5 5-5' fill='none' stroke='%2322c55e' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    }
+    .help {
+      font-size: 11.5px;
+      color: var(--muted);
+      margin-top: 6px;
+      line-height: 1.5;
+    }
+    .check-row {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      cursor: pointer;
+      user-select: none;
+      padding: 3px 0;
+    }
+    .check-input {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 20px;
+      height: 20px;
+      flex-shrink: 0;
+      margin: 0;
+      border: 1px solid #4b607f;
+      border-radius: 6px;
+      background: linear-gradient(180deg, #162238, #0c1526);
+      display: grid;
+      place-items: center;
+      transition: background 0.16s, border-color 0.16s, box-shadow 0.16s;
+    }
+    .check-input:after {
+      content: "";
+      width: 8px;
+      height: 4px;
+      border-left: 2px solid #02180e;
+      border-bottom: 2px solid #02180e;
+      transform: rotate(-45deg) scale(0);
+      transition: transform 0.15s;
+    }
+    .check-input:checked {
+      border-color: var(--green-bright);
+      background: linear-gradient(145deg, #34d399, #10b981);
+      box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.14);
+    }
+    .check-input:checked:after { transform: rotate(-45deg) scale(1); }
+
+    details:not(.log-entry) {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(7, 12, 24, 0.55);
+      margin: 16px 0;
+      padding: 12px 14px;
+    }
+    details:not(.log-entry) > summary {
+      cursor: pointer;
+      font-size: 12.5px;
+      font-weight: 650;
+      color: var(--text-soft);
+    }
+    details:not(.log-entry) .form-grid { margin-top: 14px; }
+
+    /* Modal Dialogs with Top-Layer Entry Transitions */
+    dialog {
+      width: min(560px, calc(100% - 28px));
+      max-height: 90vh;
+      border: 1px solid var(--line-strong);
+      border-radius: 18px;
+      padding: 0;
+      color: var(--text);
+      background: linear-gradient(180deg, #0f192d, #09101f);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), var(--shadow-lg);
+      opacity: 0;
+      transition-property: opacity, transform, display, overlay;
+      transition-duration: 0.2s;
+      transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+      transition-behavior: allow-discrete;
+    }
+    dialog[open] {
+      opacity: 1;
+    }
+    @starting-style {
+      dialog[open] { opacity: 0; }
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      dialog { transform: translateY(8px) scale(0.97); }
+      dialog[open] { transform: translateY(0) scale(1); }
+      @starting-style {
+        dialog[open] { transform: translateY(10px) scale(0.97); }
+      }
+    }
+    dialog::backdrop {
+      background-color: rgba(2, 6, 17, 0);
+      backdrop-filter: blur(0px);
+      transition-property: background-color, backdrop-filter, display, overlay;
+      transition-duration: 0.16s;
+      transition-behavior: allow-discrete;
+    }
+    dialog[open]::backdrop {
+      background-color: rgba(2, 6, 17, 0.74);
+      backdrop-filter: blur(5px);
+    }
+    @starting-style {
+      dialog[open]::backdrop {
+        background-color: rgba(2, 6, 17, 0);
+        backdrop-filter: blur(0px);
+      }
+    }
+    .modal-head {
+      padding: 18px 22px 15px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      background: rgba(15, 24, 44, 0.55);
+    }
+    .modal-head h3 { margin: 0; font-size: 16px; font-weight: 700; }
+    .modal-body {
+      padding: 20px 22px;
+      max-height: 75vh;
+      overflow: auto;
+    }
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 20px;
+      padding-top: 14px;
+      border-top: 1px solid rgba(148, 163, 184, 0.1);
+    }
+
+    /* Fullscreen Auth & Redesigned Login Screen */
+    .login {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      place-items: center;
+      padding: 20px;
+      overflow-y: auto;
+      background:
+        radial-gradient(680px 380px at 50% 18%, rgba(16, 185, 129, 0.16), transparent 65%),
+        radial-gradient(560px 360px at 80% 80%, rgba(56, 189, 248, 0.10), transparent 65%),
+        rgba(3, 6, 15, 0.96);
+    }
+    .login::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(148, 163, 184, 0.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(148, 163, 184, 0.045) 1px, transparent 1px);
+      background-size: 36px 36px;
+      mask-image: radial-gradient(circle at 50% 38%, #000 18%, transparent 72%);
+      -webkit-mask-image: radial-gradient(circle at 50% 38%, #000 18%, transparent 72%);
+    }
+    .login.hidden { display: none; }
+
+    .login-card {
+      position: relative;
+      z-index: 1;
+      width: min(440px, calc(100vw - 32px));
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(14, 23, 42, 0.94), rgba(8, 13, 25, 0.98));
+      padding: 32px 30px 28px;
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.09),
+        0 0 0 1px rgba(16, 185, 129, 0.08),
+        var(--shadow-lg);
+      backdrop-filter: blur(20px);
+    }
+    .login-badge-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .login-card .logo {
+      width: 46px;
+      height: 46px;
+      border-radius: 14px;
+      margin: 0;
+    }
+    .login-card .logo .icon-svg { width: 22px; height: 22px; }
+    .security-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 650;
+      color: #6ee7b7;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(52, 211, 153, 0.25);
+    }
+    .login-eyebrow {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #34d399;
+      margin-bottom: 4px;
+    }
+    .login-card h2 {
+      font-size: 23px;
+      font-weight: 750;
+      letter-spacing: -0.03em;
+      margin: 0 0 6px;
+    }
+    .login-card > p {
+      font-size: 13.5px;
+      line-height: 1.55;
+      color: var(--muted);
+      margin: 0 0 16px;
+    }
+    .login-protocols {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 22px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+    .login-proto-tag {
+      font-size: 11px;
+      font-weight: 600;
+      color: #cbd5e1;
+      background: rgba(30, 41, 59, 0.55);
+      border: 1px solid rgba(148, 163, 184, 0.15);
+      border-radius: 7px;
+      padding: 3px 8px;
+    }
+    .input-icon-wrap { position: relative; }
+    .input-icon-wrap .field-icon {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #64748b;
+      pointer-events: none;
+    }
+    .input-icon-wrap .input { padding-left: 38px; }
+    .password-input { position: relative; }
+    .password-input input { padding-right: 88px; }
+    .password-toggle {
+      position: absolute;
+      right: 7px;
+      top: 6px;
+      bottom: 6px;
+      border: 0;
+      border-left: 1px solid var(--line);
+      background: transparent;
+      color: var(--muted);
+      font-size: 11.5px;
+      font-weight: 600;
+      padding: 0 10px;
+      border-radius: 0 7px 7px 0;
+    }
+    .password-toggle:hover { color: #6ee7b7; }
+    .totp-input {
+      font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+      letter-spacing: 0.22em;
+      font-weight: 650;
+    }
+    .totp-input::placeholder { letter-spacing: 0.18em; }
+    .login-submit {
+      width: 100%;
+      min-height: 44px;
+      margin-top: 18px;
+      font-size: 14px;
+      border-radius: 11px;
+    }
+    .login-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid rgba(148, 163, 184, 0.1);
+      font-size: 11.5px;
+      color: var(--muted);
+    }
+    .login-foot a {
+      color: #7dd3fc;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .login-foot a:hover { text-decoration: underline; }
+    .login-error {
+      min-height: 0;
+      color: #fecaca;
+      font-size: 12.5px;
+      margin-top: 10px;
+    }
+    .login-error:not(:empty) {
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(127, 29, 29, 0.36);
+      border: 1px solid rgba(248, 113, 113, 0.38);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .login-error:not(:empty)::before {
+      content: "!";
+      width: 18px;
+      height: 18px;
+      flex-shrink: 0;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      font-size: 11px;
+      font-weight: 800;
+      background: rgba(239, 68, 68, 0.28);
+      color: #fecaca;
+    }
+
+    /* Session Check Card */
+    .session-check {
+      position: relative;
+      z-index: 1;
+      padding: 28px 34px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(11, 18, 32, 0.9);
+      box-shadow: var(--shadow);
+      text-align: center;
+      color: var(--muted);
+      font-size: 13.5px;
+    }
+    .session-spinner {
+      width: 32px;
+      height: 32px;
+      margin: 0 auto 14px;
+      border: 2.5px solid rgba(148, 163, 184, 0.2);
+      border-top-color: var(--green-bright);
+      border-radius: 50%;
+      animation: session-spin 0.75s linear infinite;
+    }
+    @keyframes session-spin { to { transform: rotate(360deg); } }
+
+    /* Toast & Skeletons */
+    .toast {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      z-index: 60;
+      max-width: 400px;
+      padding: 12px 16px;
+      border: 1px solid rgba(52, 211, 153, 0.32);
+      border-radius: 12px;
+      background: rgba(12, 22, 38, 0.95);
+      backdrop-filter: blur(12px);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 550;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transform: translateY(10px);
+      pointer-events: none;
+      transition: opacity 0.2s, transform 0.2s;
+    }
+    .toast.show { opacity: 1; transform: none; }
+    .toast.error {
+      border-color: rgba(248, 113, 113, 0.48);
+      background: rgba(36, 12, 18, 0.95);
+      color: #fecaca;
+    }
+    .skeleton {
+      height: 52px;
+      margin: 12px 18px;
+      border-radius: 10px;
+      background: linear-gradient(90deg, #0f182a, #182640, #0f182a);
+      background-size: 200% 100%;
+      animation: shine 1.2s infinite;
+    }
+    @keyframes shine { to { background-position: -200% 0; } }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.08s !important;
+      }
+    }
+    @media (forced-colors: active) {
+      .card, .stat, .btn, .input, .badge, dialog, .login-card {
+        border: 1px solid CanvasText;
+      }
+    }
+    @media (max-width: 920px) {
+      .status-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .overview-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 650px) {
+      .shell { width: calc(100% - 20px); padding-top: 12px; }
+      .topbar { flex-wrap: wrap; padding: 11px 12px; }
+      .brand p { display: none; }
+      .brand h1 { font-size: 14px; }
+      .nav {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .nav button { min-width: 0; padding: 9px 6px; font-size: 12px; gap: 5px; }
+      .nav button .icon-svg { display: none; }
+      .page-head { align-items: stretch; flex-direction: column; }
+      .card-head { flex-wrap: wrap; }
+      .actions { flex-wrap: wrap; }
+      .form-grid { grid-template-columns: 1fr; }
+      .log-entry summary { grid-template-columns: 64px minmax(0, 1fr); gap: 6px; padding: 12px; }
+      .log-severity { grid-column: 1; justify-self: start; }
+      .log-content { grid-column: 2; grid-row: 1 / span 2; }
+      .log-details { padding: 0 12px 14px; }
+      .log-details dl { grid-template-columns: 96px minmax(0, 1fr); }
+      .log-toolbar .input { width: 100%; }
+      .login-card { padding: 24px 20px; border-radius: 18px; }
+    }
+    @media (max-width: 600px) {
+      .top-actions .btn span { display: none; }
+      .top-actions .btn { width: 38px; padding: 0; }
+      .page-head h2 { font-size: 21px; }
+    }
+    @media (max-width: 480px) {
+      .status-row { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
-  <div id="sessionLoading" class="login" role="status" aria-live="polite"><div class="session-check"><div class="session-spinner" aria-hidden="true"></div><p id="sessionLoadingMessage">Проверяем сессию…</p><button id="sessionRetry" class="btn" type="button" hidden>Повторить</button></div></div>
+  <div id="sessionLoading" class="login" role="status" aria-live="polite">
+    <div class="session-check">
+      <div class="session-spinner" aria-hidden="true"></div>
+      <p id="sessionLoadingMessage">Проверяем сессию…</p>
+      <button id="sessionRetry" class="btn" type="button" hidden style="margin-top:12px">Повторить</button>
+    </div>
+  </div>
+
   <div id="login" class="login hidden">
-    <form id="loginForm" class="login-card">
-      <div class="logo" aria-hidden="true"><svg class="icon-svg" viewBox="0 0 24 24"><path d="M12 3 4.5 7.2v9.6L12 21l7.5-4.2V7.2L12 3Z"/><path d="m4.8 7.4 7.2 4 7.2-4M12 11.4V21"/></svg></div>
-      <h2>Вход в панель</h2>
-      <p>Управление провайдерами, ключами и сетевыми маршрутами.</p>
-      <div id="passwordLoginFields"><div class="field"><label for="adminName">Логин</label><input id="adminName" name="username" class="input" autocomplete="username" value="owner" required></div><div class="field"><label for="adminPassword">Пароль</label><div class="password-input"><input id="adminPassword" name="password" class="input" type="password" autocomplete="current-password" required><button type="button" class="password-toggle" data-password-toggle="adminPassword" aria-label="Показать пароль">Показать</button></div></div></div>
-      <div class="field"><label for="adminTotp">Код аутентификатора <span class="muted">если включён TOTP</span></label><input id="adminTotp" class="input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000"></div>
-      <label class="check-row"><input id="rememberAdmin" class="check-input" type="checkbox" checked><span>Запомнить меня на 30 дней</span></label>
-      <button id="loginSubmit" class="btn primary" type="submit" style="width:100%;margin-top:20px">Войти</button>
-      <div class="help">Сохраняется защищённая сессия, не пароль. Для входа используйте HTTPS.</div>
-      <div id="loginError" class="login-error" role="alert"></div>
+    <form id="loginForm" class="login-card" method="post" action="/api/admin/login" aria-labelledby="loginHeading">
+      <div class="login-badge-row">
+        <div class="logo" aria-hidden="true">
+          <svg class="icon-svg" viewBox="0 0 24 24"><path d="M12 3 4.5 7.2v9.6L12 21l7.5-4.2V7.2L12 3Z"/><path d="m4.8 7.4 7.2 4 7.2-4M12 11.4V21"/></svg>
+        </div>
+        <span class="security-pill">
+          <svg class="icon-svg" style="width:13px;height:13px" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg>
+          AES-256-GCM
+        </span>
+      </div>
+      <div class="login-eyebrow">AgentRouter Personal Gateway</div>
+      <h2 id="loginHeading">Вход в консоль</h2>
+      <p>Единая точка управления провайдерами, API-ключами, сетевыми маршрутами и кэшем.</p>
+      <div class="login-protocols" aria-hidden="true">
+        <span class="login-proto-tag">Responses</span>
+        <span class="login-proto-tag">Chat Completions</span>
+        <span class="login-proto-tag">Anthropic</span>
+        <span class="login-proto-tag">Google GenAI</span>
+      </div>
+
+      <div id="passwordLoginFields">
+        <div class="field">
+          <label for="adminName">Логин администратора</label>
+          <div class="input-icon-wrap">
+            <svg class="icon-svg field-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c1.8-3.6 5-5.5 8-5.5s6.2 1.9 8 5.5"/></svg>
+            <input id="adminName" name="username" class="input" type="text" autocomplete="username" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" value="owner" required>
+          </div>
+        </div>
+        <div class="field">
+          <label for="adminPassword">Пароль</label>
+          <div class="password-input input-icon-wrap">
+            <svg class="icon-svg field-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+            <input id="adminPassword" name="password" class="input" type="password" autocomplete="current-password" enterkeyhint="done" required>
+            <button type="button" class="password-toggle" data-password-toggle="adminPassword" aria-pressed="false" aria-label="Показать пароль">Показать</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="adminTotp">Код 2FA (TOTP) <span class="muted" style="font-weight:500">если включён</span></label>
+        <div class="input-icon-wrap">
+          <svg class="icon-svg field-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 12h.01M12 12h.01M16 12h.01"/></svg>
+          <input id="adminTotp" name="totp" class="input totp-input" type="text" inputmode="numeric" autocomplete="one-time-code" autocorrect="off" autocapitalize="none" spellcheck="false" maxlength="6" placeholder="000000">
+        </div>
+      </div>
+
+      <label class="check-row">
+        <input id="rememberAdmin" name="remember" class="check-input" type="checkbox" checked>
+        <span>Запомнить вход на 30 дней</span>
+      </label>
+
+      <div id="loginError" class="login-error" role="alert" aria-live="polite"></div>
+
+      <button id="loginSubmit" class="btn primary login-submit" type="submit">
+        <span>Войти в панель</span>
+        <svg class="icon-svg" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
+
+      <div class="login-foot">
+        <span>Защищённая HttpOnly сессия</span>
+        <a href="/docs" target="_blank" rel="noopener">OpenAPI Docs →</a>
+      </div>
     </form>
   </div>
+
   <main id="adminDashboard" class="shell" hidden>
     <header class="topbar">
-      <div class="brand"><div class="logo"><svg class="icon-svg" viewBox="0 0 24 24"><path d="M12 3 4.5 7.2v9.6L12 21l7.5-4.2V7.2L12 3Z"/><path d="m4.8 7.4 7.2 4 7.2-4M12 11.4V21"/></svg></div><div><h1>AgentRouter Control Plane</h1><p>Local gateway administration</p></div></div>
-      <div class="top-actions"><button id="refreshBtn" class="btn icon" aria-label="Refresh"><svg class="icon-svg" viewBox="0 0 24 24"><path d="M20 6v5h-5M4 18v-5h5"/><path d="M18.5 9A7 7 0 0 0 6 6.5L4 9m2 6a7 7 0 0 0 12 2.5L20 15"/></svg></button><button id="adminAccessBtn" class="btn" type="button">Пароль и доступ</button><button id="lockBtn" class="btn"><svg class="icon-svg" viewBox="0 0 24 24"><path d="M7 11V8a5 5 0 0 1 10 0v3M5 11h14v10H5z"/></svg><span>Выйти</span></button></div>
+      <div class="brand">
+        <div class="logo" aria-hidden="true">
+          <svg class="icon-svg" viewBox="0 0 24 24"><path d="M12 3 4.5 7.2v9.6L12 21l7.5-4.2V7.2L12 3Z"/><path d="m4.8 7.4 7.2 4 7.2-4M12 11.4V21"/></svg>
+        </div>
+        <div>
+          <h1>AgentRouter Control Plane</h1>
+          <p>Личный мультипротокольный AI-шлюз</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <a href="/docs" target="_blank" rel="noopener" class="btn" title="OpenAPI документация">
+          <svg class="icon-svg" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>
+          <span>API Docs</span>
+        </a>
+        <button id="refreshBtn" class="btn icon" type="button" aria-label="Обновить данные" title="Обновить">
+          <svg class="icon-svg" viewBox="0 0 24 24"><path d="M20 6v5h-5M4 18v-5h5"/><path d="M18.5 9A7 7 0 0 0 6 6.5L4 9m2 6a7 7 0 0 0 12 2.5L20 15"/></svg>
+        </button>
+        <button id="adminAccessBtn" class="btn" type="button">
+          <svg class="icon-svg" viewBox="0 0 24 24"><circle cx="9" cy="12" r="4"/><path d="M13 12h8m-3 0v3m3-3v2"/></svg>
+          <span>Пароль</span>
+        </button>
+        <button id="lockBtn" class="btn" type="button">
+          <svg class="icon-svg" viewBox="0 0 24 24"><path d="M7 11V8a5 5 0 0 1 10 0v3M5 11h14v10H5z"/></svg>
+          <span>Выйти</span>
+        </button>
+      </div>
     </header>
-    <nav class="nav" aria-label="Administration"><button data-page="overview" aria-current="page">Overview</button><button data-page="providers">Providers</button><button data-page="credentials">API keys</button><button data-page="proxies">Network proxies</button><button data-page="clients">Client access</button><button data-page="logs">Events</button></nav>
-    <section id="page-overview"><div class="page-head"><div><h2>Gateway overview</h2><p>Routing health and usage, without credential tables.</p></div><div class="toolbar"><button id="exportBtn" class="btn">Export backup</button><button id="importBtn" class="btn">Import backup</button><input id="importFile" type="file" accept="application/json" hidden></div></div>    <section class="status-row" aria-label="Gateway status">
-      <article class="stat"><div class="stat-label">Gateway</div><div class="stat-value"><span id="gatewayDot" class="dot"></span><span id="gatewayValue">Loading</span></div></article>
-      <article class="stat"><div class="stat-label">WAF session</div><div class="stat-value"><span id="wafDot" class="dot"></span><span id="wafValue">Loading</span></div></article>
-      <article class="stat"><div class="stat-label">Enabled keys</div><div id="enabledValue" class="stat-value">—</div></article>
-      <article class="stat"><div class="stat-label">Routing policy</div><div id="routingDropdown" class="dropdown"><button id="modeButton" class="dropdown-trigger" type="button" aria-haspopup="menu" aria-expanded="false"><span id="modeValue">—</span><svg class="icon-svg chevron" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></svg></button><div class="dropdown-menu" role="menu"><button class="dropdown-option" type="button" role="menuitem" data-mode="inbound-first">Inbound first</button><button class="dropdown-option" type="button" role="menuitem" data-mode="pool-first">Pool first</button><button class="dropdown-option" type="button" role="menuitem" data-mode="pool-only">Pool only</button></div></div></article>
+
+    <nav class="nav" aria-label="Разделы панели">
+      <button type="button" data-page="overview" aria-current="page">
+        <svg class="icon-svg" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+        <span>Обзор</span>
+      </button>
+      <button type="button" data-page="providers">
+        <svg class="icon-svg" viewBox="0 0 24 24"><path d="M12 3 3 8l9 5 9-5-9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></svg>
+        <span>Провайдеры</span>
+      </button>
+      <button type="button" data-page="credentials">
+        <svg class="icon-svg" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 9.2-9.2m-3 3 3 3m-6 0 2.5 2.5"/></svg>
+        <span>API-ключи</span>
+      </button>
+      <button type="button" data-page="proxies">
+        <svg class="icon-svg" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><path d="M8.5 7.5 11 15.2m4.5-7.7L13 15.2"/></svg>
+        <span>Прокси</span>
+      </button>
+      <button type="button" data-page="clients">
+        <svg class="icon-svg" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15h4M7 10h10"/></svg>
+        <span>Доступ IDE</span>
+      </button>
+      <button type="button" data-page="logs">
+        <svg class="icon-svg" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+        <span>Журнал</span>
+      </button>
+    </nav>
+
+    <section id="page-overview">
+      <div class="page-head">
+        <div>
+          <h2>Обзор шлюза</h2>
+          <p>Состояние пула, активная политика маршрутизации, точки подключения и расход по ключам.</p>
+        </div>
+        <div class="toolbar">
+          <button id="probeAllBtn" class="btn" type="button">Проверить ключи</button>
+          <button id="exportBtn" class="btn" type="button">Экспорт бэкапа</button>
+          <button id="importBtn" class="btn" type="button">Импорт бэкапа</button>
+          <input id="importFile" type="file" accept="application/json" hidden>
+        </div>
+      </div>
+
+      <section class="status-row" aria-label="Статус шлюза">
+        <article class="stat">
+          <div class="stat-top">
+            <div class="stat-label">Статус шлюза</div>
+            <span class="stat-icon" aria-hidden="true"><svg class="icon-svg" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
+          </div>
+          <div class="stat-value"><span id="gatewayDot" class="dot"></span><span id="gatewayValue">Загрузка…</span></div>
+        </article>
+        <article class="stat">
+          <div class="stat-top">
+            <div class="stat-label">Сессия WAF</div>
+            <span class="stat-icon" aria-hidden="true"><svg class="icon-svg" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg></span>
+          </div>
+          <div class="stat-value"><span id="wafDot" class="dot"></span><span id="wafValue">Загрузка…</span></div>
+        </article>
+        <article class="stat">
+          <div class="stat-top">
+            <div class="stat-label">Активные ключи</div>
+            <span class="stat-icon" aria-hidden="true"><svg class="icon-svg" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 9.2-9.2"/></svg></span>
+          </div>
+          <div id="enabledValue" class="stat-value">—</div>
+        </article>
+        <article class="stat">
+          <div class="stat-top">
+            <div class="stat-label">Режим пула</div>
+            <span class="stat-icon" aria-hidden="true"><svg class="icon-svg" viewBox="0 0 24 24"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg></span>
+          </div>
+          <div id="routingDropdown" class="dropdown">
+            <button id="modeButton" class="dropdown-trigger" type="button" aria-haspopup="menu" aria-expanded="false">
+              <span id="modeValue">—</span>
+              <svg class="icon-svg chevron" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></svg>
+            </button>
+            <div class="dropdown-menu" role="menu">
+              <button class="dropdown-option" type="button" role="menuitem" data-mode="inbound-first">Inbound first</button>
+              <button class="dropdown-option" type="button" role="menuitem" data-mode="pool-first">Pool first</button>
+              <button class="dropdown-option" type="button" role="menuitem" data-mode="pool-only">Pool only</button>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <div class="overview-meta">
+        <p id="storeState" class="muted"></p>
+        <span id="infraState" class="muted"></span>
+      </div>
+
+      <div class="overview-grid">
+        <article class="card">
+          <div class="card-head">
+            <h3>Использование и расход · топ 8 ключей</h3>
+          </div>
+          <div id="usageChart" class="chart-list"></div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h3>Быстрое подключение в IDE</h3>
+          </div>
+          <div class="endpoint-list">
+            <div class="endpoint-item">
+              <div class="endpoint-info">
+                <div class="endpoint-tag">OpenAI SDK / Cursor / Cline</div>
+                <div id="epOpenAI" class="endpoint-url">/v1</div>
+              </div>
+              <button type="button" class="endpoint-copy" data-copy-ep="epOpenAI">Копировать</button>
+            </div>
+            <div class="endpoint-item">
+              <div class="endpoint-info">
+                <div class="endpoint-tag">Claude Code / Anthropic Base URL</div>
+                <div id="epAnthropic" class="endpoint-url">/</div>
+              </div>
+              <button type="button" class="endpoint-copy" data-copy-ep="epAnthropic">Копировать</button>
+            </div>
+            <div class="endpoint-item">
+              <div class="endpoint-info">
+                <div class="endpoint-tag">Codex / OpenAI Responses</div>
+                <div id="epResponses" class="endpoint-url">/v1/responses</div>
+              </div>
+              <button type="button" class="endpoint-copy" data-copy-ep="epResponses">Копировать</button>
+            </div>
+          </div>
+          <div class="cache-strip">
+            <span id="cacheInfo">Кэш ответов: готов</span>
+            <button id="clearCacheBtn" type="button" class="btn sm">Сбросить кэш</button>
+          </div>
+        </article>
+      </div>
     </section>
-<p id="storeState" class="muted"></p><article class="card"><div class="card-head"><h3>Usage and cost · top 8 keys</h3></div><div id="usageChart" class="chart-list"></div></article></section>
-    <section id="page-providers" hidden><div class="page-head"><div><h2>Providers and models</h2><p>Choose which API serves each model. All linked keys inherit the provider URL, protocol and model catalog.</p></div><button id="addProviderBtn" class="btn primary">Add provider</button></div><div id="providerContent" class="provider-grid"></div></section>
-    <section id="page-credentials" hidden><div class="page-head"><div><h2>API credentials</h2><p>Select an existing provider and a network route. Manage model routing in Providers.</p></div><button id="addBtn" class="btn primary">Add API key</button></div>    <section class="card">
-      <div class="card-head"><div class="card-title"><h3>Credentials</h3><span id="keyCount" class="count">0</span></div><input id="keySearch" class="input" type="search" placeholder="Search credentials" aria-label="Search credentials" style="max-width:260px"></div>
-      <div id="keyContent"><div class="skeleton"></div><div class="skeleton"></div></div>
-<div class="pagination"><button id="keyPrev" class="btn">Previous</button><span id="keyPageLabel"></span><button id="keyNext" class="btn">Next</button></div></section>
-</section>
-    <section id="page-proxies" hidden><div class="page-head"><div><h2>Network proxies</h2><p>HTTP, HTTPS CONNECT and SOCKS5. Automatic redistribution with minimal moves.</p></div><button id="addProxyBtn" class="btn primary">Add proxy</button></div><section class="card"><div class="card-head"><div class="card-title"><h3>Outbound routes</h3><span id="proxyCount" class="count">0</span></div></div><div id="proxyContent"></div></section><p class="summary-note">Manual bindings never move. Unavailable proxies never silently fall back to direct access.</p></section>
-    <section id="page-clients" hidden><div class="page-head"><div><h2>Client access</h2><p>Gateway tokens are separate from provider credentials.</p></div></div>    <section class="card" style="margin-bottom:16px"><div class="card-head"><div class="card-title"><h3>Client API keys</h3><span id="clientKeyCount" class="count">0</span></div><button id="createClientKeyBtn" class="btn primary">Create client key</button></div><div id="clientKeyContent"><div class="empty"><p>Loading client access keys?</p></div></div></section>
-</section>
+
+    <section id="page-providers" hidden>
+      <div class="page-head">
+        <div>
+          <h2>Провайдеры и модели</h2>
+          <p>Задайте базовый URL, протокол и список моделей. Привязанные ключи наследуют настройки провайдера.</p>
+        </div>
+        <button id="addProviderBtn" class="btn primary" type="button">Добавить провайдер</button>
+      </div>
+      <div id="providerContent" class="provider-grid"></div>
+    </section>
+
+    <section id="page-credentials" hidden>
+      <div class="page-head">
+        <div>
+          <h2>API-ключи провайдеров</h2>
+          <p>Ключи шифруются AES-256-GCM перед сохранением, поддерживают приоритеты, бюджеты и автоматический failover.</p>
+        </div>
+        <button id="addBtn" class="btn primary" type="button">Добавить API-ключ</button>
+      </div>
+      <section class="card">
+        <div class="card-head">
+          <div class="card-title"><h3>Пул ключей</h3><span id="keyCount" class="count">0</span></div>
+          <search class="log-search-landmark">
+            <input id="keySearch" class="input" type="search" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="Поиск по имени, провайдеру, модели…" aria-label="Поиск ключей" style="max-width:290px">
+          </search>
+        </div>
+        <div id="keyContent"><div class="skeleton"></div><div class="skeleton"></div></div>
+        <div class="pagination">
+          <button id="keyPrev" class="btn sm" type="button">Назад</button>
+          <span id="keyPageLabel"></span>
+          <button id="keyNext" class="btn sm" type="button">Далее</button>
+        </div>
+      </section>
+    </section>
+
+    <section id="page-proxies" hidden>
+      <div class="page-head">
+        <div>
+          <h2>Сетевые прокси</h2>
+          <p>Маршруты HTTP, HTTPS CONNECT и SOCKS5 с изолированными WAF-сессиями и балансировкой ключей.</p>
+        </div>
+        <button id="addProxyBtn" class="btn primary" type="button">Добавить прокси</button>
+      </div>
+      <section class="card">
+        <div class="card-head">
+          <div class="card-title"><h3>Исходящие маршруты</h3><span id="proxyCount" class="count">0</span></div>
+        </div>
+        <div id="proxyContent"></div>
+      </section>
+      <p class="summary-note">Ручные привязки не перемещаются при ребалансировке. При сбое прокси прямой выход в сеть заблокирован (fail-closed).</p>
+    </section>
+
+    <section id="page-clients" hidden>
+      <div class="page-head">
+        <div>
+          <h2>Клиентские ключи для IDE и агентов</h2>
+          <p>Токены формата <code>arp_...</code> работают как стандартный <code>Authorization: Bearer</code> (OpenAI) и <code>x-api-key</code> (Claude Code) и никогда не пересылаются апстриму.</p>
+        </div>
+      </div>
+      <section class="card" style="margin-bottom:16px">
+        <div class="card-head">
+          <div class="card-title"><h3>Клиентские API-ключи</h3><span id="clientKeyCount" class="count">0</span></div>
+          <button id="createClientKeyBtn" class="btn primary" type="button">Создать ключ</button>
+        </div>
+        <div id="clientKeyContent"><div class="empty"><p>Загрузка клиентских ключей…</p></div></div>
+      </section>
+    </section>
+
     <section id="page-logs" hidden>
-      <div class="page-head"><div><h2>Журнал запросов</h2><p>Результаты, маршруты и ошибки. Успешные фоновые события скрыты по умолчанию.</p></div><button id="logPause" class="btn" type="button">Пауза</button></div>
-      <section class="card"><div class="card-head log-toolbar">
-        <input id="logSearch" class="input" type="search" placeholder="Модель, provider, ключ, request ID…" aria-label="Поиск в журнале">
-        <select id="logLevel" class="input" aria-label="Уровень журнала"><option value="">Все уровни</option><option value="problems">Предупреждения и ошибки</option><option value="error">Только ошибки</option><option value="info">Информация</option></select>
-        <select id="logCategory" class="input" aria-label="Категория журнала"><option value="">Все категории</option><option value="requests">Запросы</option><option value="routing">Routing / failover</option><option value="tools">Инструменты</option><option value="admin">Администрирование</option><option value="system">Система</option></select>
-        <label class="check-row"><input id="logBackground" class="check-input" type="checkbox"><span>Фоновые события</span></label>
-        <button id="logClearRequest" class="btn" hidden type="button">Все запросы</button>
-      </div><div id="logState" class="help log-state" role="status"></div><div id="logList" class="log-list"></div></section>
+      <div class="page-head">
+        <div>
+          <h2>Журнал событий</h2>
+          <p>Живой поток запросов, переключений ключей и ошибок без раскрытия секретов и промптов.</p>
+        </div>
+        <button id="logPause" class="btn" type="button">Пауза</button>
+      </div>
+      <section class="card">
+        <search class="log-search-landmark">
+          <div class="card-head log-toolbar">
+            <input id="logSearch" class="input" type="search" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="Модель, провайдер, ключ, Request ID…" aria-label="Поиск в журнале">
+            <select id="logLevel" class="input" aria-label="Уровень журнала">
+              <option value="">Все уровни</option>
+              <option value="problems">Предупреждения и ошибки</option>
+              <option value="error">Только ошибки</option>
+              <option value="info">Информация</option>
+            </select>
+            <select id="logCategory" class="input" aria-label="Категория журнала">
+              <option value="">Все категории</option>
+              <option value="requests">Запросы</option>
+              <option value="routing">Routing / failover</option>
+              <option value="tools">Инструменты</option>
+              <option value="admin">Администрирование</option>
+              <option value="system">Система</option>
+            </select>
+            <label class="check-row"><input id="logBackground" class="check-input" type="checkbox"><span>Фоновые события</span></label>
+            <button id="logClearRequest" class="btn sm" hidden type="button">Все запросы</button>
+          </div>
+        </search>
+        <div id="logState" class="help log-state" role="status"></div>
+        <div id="logList" class="log-list"></div>
+      </section>
     </section>
   </main>
-  <dialog id="addDialog">
-    <form id="addForm">
-      <div class="modal-head"><h3>Add upstream credential</h3><button type="button" class="btn icon" data-close aria-label="Close"><svg class="icon-svg" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
-      <div class="modal-body"><div class="field"><label for="keyName">Display name</label><input id="keyName" class="input" maxlength="80" placeholder="Production primary" required></div><div class="field"><label for="keyValue">API key</label><input id="keyValue" class="input" type="password" autocomplete="off" placeholder="sk-..." required><div class="help">Encrypted before it is written to disk. The full value cannot be viewed again.</div></div><div class="field"><label for="keyProvider">Provider</label><select id="keyProvider" class="input"></select><div class="help">Base URL, protocol and models are managed in the Providers section.</div></div><div class="field"><label for="keyBaseURL">Upstream Base URL</label><input id="keyBaseURL" class="input" type="url" value="https://agentrouter.org" required><div class="help">Origin or API prefix, e.g. https://provider.example/api/v1. No credentials, query or fragment.</div></div><div class="field"><label for="keyProtocol">API protocol</label><select id="keyProtocol" class="input"><option value="responses">Responses API</option><option value="chat-completions">Chat Completions API</option><option value="anthropic">Anthropic Messages API</option><option value="genai">Google GenAI</option></select></div><div class="field"><label for="keySpoofProfile">Request profile</label><select id="keySpoofProfile" class="input"><option value="">Automatic (custom origin uses generic)</option><option value="generic">Generic OpenAI (no AgentRouter spoofing)</option><option value="claude-code">Claude Code</option><option value="codex">Codex</option></select></div><div class="field"><label for="keyProxyRoute">Network route</label><select id="keyProxyRoute" class="input"><option value="auto">Automatic binding</option><option value="direct">Direct (no network proxy)</option></select><div class="help">Automatic uses one assigned proxy; pool changes may move idle keys.</div></div><label class="check-row"><input id="keyEnabled" class="check-input" type="checkbox" checked><span>Enable immediately</span></label><div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button id="saveKeyBtn" type="submit" class="btn primary">Save key</button></div></div>
+
+  <dialog id="addDialog" closedby="any" aria-labelledby="addDialogTitle">
+    <form id="addForm" method="post">
+      <div class="modal-head">
+        <h3 id="addDialogTitle">Добавить API-ключ</h3>
+        <button type="button" class="btn icon" data-close aria-label="Закрыть"><svg class="icon-svg" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <div class="field"><label for="keyName">Название</label><input id="keyName" name="name" class="input" maxlength="80" placeholder="Main Production" required></div>
+        <div class="field"><label for="keyValue">API-ключ провайдера</label><input id="keyValue" name="key" class="input" type="password" autocomplete="off" placeholder="sk-..." required><div class="help">Шифруется на диске; полный ключ повторно не отображается.</div></div>
+        <div class="field"><label for="keyProvider">Провайдер</label><select id="keyProvider" class="input"></select><div class="help">URL, протокол и список моделей наследуются от выбранного провайдера.</div></div>
+        <div class="field"><label for="keyBaseURL">Upstream Base URL</label><input id="keyBaseURL" class="input" type="url" autocorrect="off" autocapitalize="none" spellcheck="false" value="https://agentrouter.org" required><div class="help">Origin или префикс API без логина/пароля и query-параметров.</div></div>
+        <div class="field"><label for="keyProtocol">API-протокол</label><select id="keyProtocol" class="input"><option value="responses">Responses API</option><option value="chat-completions">Chat Completions API</option><option value="anthropic">Anthropic Messages API</option><option value="genai">Google GenAI</option></select></div>
+        <div class="field"><label for="keySpoofProfile">Профиль заголовков</label><select id="keySpoofProfile" class="input"><option value="">Автоматически (сторонний URL → generic)</option><option value="generic">Generic OpenAI (без мимикрии)</option><option value="claude-code">Claude Code</option><option value="codex">Codex</option></select></div>
+        <div class="field"><label for="keyProxyRoute">Сетевой маршрут</label><select id="keyProxyRoute" class="input"><option value="auto">Автоматическая привязка</option><option value="direct">Напрямую (без прокси)</option></select><div class="help">Автоматический режим закрепляет свободный прокси из пула.</div></div>
+        <label class="check-row"><input id="keyEnabled" class="check-input" type="checkbox" checked><span>Включить сразу после сохранения</span></label>
+        <div class="modal-actions"><button type="button" class="btn" data-close>Отмена</button><button id="saveKeyBtn" type="submit" class="btn primary">Сохранить ключ</button></div>
+      </div>
     </form>
   </dialog>
-  <dialog id="policyDialog"><form id="policyForm"><div class="modal-head"><h3>Routing and limits</h3><button type="button" class="btn icon" data-policy-close aria-label="Close"><svg class="icon-svg" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div><div class="modal-body"><input id="policyKeyId" type="hidden"><div class="field"><label for="policyProvider">Provider</label><select id="policyProvider" class="input"></select><div class="help">Base URL, protocol and models are managed in the Providers section.</div></div><details><summary>Priority, limits and pricing</summary><div class="form-grid"><div class="field"><label for="policyPriority">Priority</label><input id="policyPriority" class="input" type="number" min="-1000" max="1000"></div><div class="field"><label for="policyWeight">Weight</label><input id="policyWeight" class="input" type="number" min="1" max="100"></div><div class="field"><label for="policyDailyLimit">Daily request limit</label><input id="policyDailyLimit" class="input" type="number" min="0"></div><div class="field"><label for="policyBudget">Monthly budget, USD</label><input id="policyBudget" class="input" type="number" min="0" step="0.01"></div><div class="field"><label for="policyInputCost">Input $ / 1M tokens</label><input id="policyInputCost" class="input" type="number" min="0" step="0.0001"></div><div class="field"><label for="policyOutputCost">Output $ / 1M tokens</label><input id="policyOutputCost" class="input" type="number" min="0" step="0.0001"></div></div></details><div class="field"><label for="policyBaseURL">Upstream Base URL</label><input id="policyBaseURL" class="input" placeholder="https://api.example.com"><div class="help">Empty uses the default AgentRouter endpoint.</div></div><div class="field"><label for="policyProtocol">API protocol</label><select id="policyProtocol" class="input"><option value="responses">Responses API</option><option value="chat-completions">Chat Completions API</option><option value="anthropic">Anthropic Messages API</option><option value="genai">Google GenAI</option></select></div><div class="field"><label for="policySpoofProfile">Spoof profile</label><select id="policySpoofProfile" class="input"><option value="">Automatic (custom origin uses generic)</option><option value="generic">Generic OpenAI</option><option value="claude-code">Claude Code</option><option value="codex">Codex</option></select></div><div class="field"><label for="policyProxyRoute">Network route</label><select id="policyProxyRoute" class="input"><option value="auto">Automatic binding</option><option value="direct">Direct (no network proxy)</option></select><div class="help">Automatic uses one assigned proxy; pool changes may move idle keys.</div></div><div class="field"><label for="policyModels">Allowed models</label><input id="policyModels" class="input" placeholder="model-a, model-b; empty = all"><div class="help">Comma-separated exact model IDs or *.</div></div><div class="modal-actions"><button type="button" class="btn" data-policy-close>Cancel</button><button type="submit" class="btn primary">Save policy</button></div></div></form></dialog>
-  <dialog id="clientKeyDialog"><form id="clientKeyForm"><div class="modal-head"><h3>Create client API key</h3><button type="button" class="btn icon" data-client-close aria-label="Close"><svg class="icon-svg" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div><div class="modal-body"><div class="field"><label for="clientKeyName">Client name</label><input id="clientKeyName" class="input" maxlength="80" placeholder="VibeIDE laptop" required></div><div class="help">The generated key works as a standard OpenAI API key and is encrypted at rest.</div><div class="modal-actions"><button type="button" class="btn" data-client-close>Cancel</button><button type="submit" class="btn primary">Generate key</button></div></div></form></dialog>
-  <dialog id="revealDialog"><div class="modal-head"><h3>Client API key</h3><button type="button" class="btn icon" data-reveal-close aria-label="Close"><svg class="icon-svg" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div><div class="modal-body"><div class="field"><label for="revealedToken">API key</label><input id="revealedToken" class="input" readonly></div><div class="help">Use this as the OpenAI API key. Do not share it.</div><div class="modal-actions"><button id="copyClientTokenBtn" type="button" class="btn primary">Copy key</button></div></div></dialog>
-  <dialog id="proxyDialog"><form id="proxyForm"><div class="modal-head"><h3 id="proxyDialogTitle">Add network proxy</h3><button type="button" class="btn" data-proxy-close>Close</button></div><div class="modal-body"><input id="proxyEditId" type="hidden"><div class="field"><label for="proxyName">Display name</label><input id="proxyName" class="input" maxlength="80" required></div><div class="field"><label for="proxyURL">Proxy endpoint</label><input id="proxyURL" class="input" placeholder="socks5://host:1080" required><div class="help">http://, https:// or socks5://host:port. Never put credentials in the URL.</div></div><div class="form-grid"><div class="field"><label for="proxyUsername">Username</label><input id="proxyUsername" class="input" autocomplete="off" placeholder="Optional / unchanged on edit"></div><div class="field"><label for="proxyPassword">Password</label><input id="proxyPassword" class="input" type="password" autocomplete="new-password" placeholder="Optional / unchanged on edit"></div></div><label class="check-row"><input id="proxyClearAuth" type="checkbox" class="check-input"><span>Remove saved authentication</span></label><p class="help">Credentials are encrypted and never returned. Empty fields on edit keep authentication unchanged.</p><label class="check-row"><input id="proxyEnabled" type="checkbox" class="check-input" checked><span>Enable proxy</span></label><div class="modal-actions"><button type="button" class="btn" data-proxy-close>Cancel</button><button type="submit" class="btn primary">Save and rebalance</button></div></div></form></dialog>
-  <dialog id="providerDialog"><form id="providerForm"><div class="modal-head"><h3 id="providerDialogTitle">Add provider</h3><button type="button" class="btn" data-provider-close>Close</button></div><div class="modal-body"><input id="providerEditId" type="hidden"><div class="field"><label for="providerName">Display name</label><input id="providerName" class="input" maxlength="80" required placeholder="AgentRouter Main"></div><div class="field"><label for="providerBaseURL">API Base URL</label><input id="providerBaseURL" class="input" type="url" required placeholder="https://provider.example/v1"></div><div class="form-grid"><div class="field"><label for="providerProtocol">API protocol</label><select id="providerProtocol" class="input"><option value="responses">Responses API</option><option value="chat-completions">Chat Completions API</option><option value="anthropic">Anthropic Messages API</option><option value="genai">Google GenAI</option></select></div><div class="field"><label for="providerProfile">Request profile</label><select id="providerProfile" class="input"><option value="">Automatic</option><option value="generic">Generic OpenAI</option><option value="claude-code">Claude Code</option><option value="codex">Codex</option></select></div></div><div class="field"><label for="providerModels">Model IDs</label><textarea id="providerModels" class="input" rows="5" placeholder="model-a&#10;model-b"></textarea><div class="help">One exact model ID per line or comma-separated. Empty = no generation models. No wildcards. Add a model to another provider only if failover there is intended.</div></div><label class="check-row"><input id="providerEnabled" class="check-input" type="checkbox" checked><span>Enable provider</span></label><div class="help">Changing URL or models affects all linked keys. Active requests finish unchanged.</div><div class="modal-actions"><button type="button" class="btn" data-provider-close>Cancel</button><button type="submit" class="btn primary">Save provider</button></div></div></form></dialog>
-  <dialog id="editKeyDialog"><form id="editKeyForm"><div class="modal-head"><h3>Редактировать API-ключ</h3><button type="button" class="btn" data-edit-key-close>Закрыть</button></div><div class="modal-body"><input id="editKeyId" type="hidden"><div class="field"><label for="editKeyName">Название</label><input id="editKeyName" class="input" maxlength="80" required></div><p id="editKeyCurrent" class="help"></p><div class="field"><label for="editKeyValue">Новый API-ключ — необязательно</label><input id="editKeyValue" class="input" type="password" autocomplete="new-password" minlength="8" maxlength="4096" placeholder="Пусто — оставить текущий ключ"><div class="help">Сохранённый credential не раскрывается. Замена сохраняет provider, сетевой маршрут, лимиты и историю использования; cooldown старого credential сбрасывается.</div></div><label class="check-row"><input id="editKeyEnabled" class="check-input" type="checkbox"><span>Включён</span></label><div class="modal-actions"><button type="button" class="btn" data-edit-key-close>Отмена</button><button type="submit" class="btn primary">Сохранить</button></div></div></form></dialog>
-  <dialog id="adminPasswordDialog"><form id="adminPasswordForm"><div class="modal-head"><h3>Пароль администратора</h3><button type="button" class="btn" data-admin-password-close>Закрыть</button></div><div class="modal-body"><p id="adminAccountLabel" class="help"></p><div class="field"><label for="currentAdminSecret">Текущий пароль</label><input id="currentAdminSecret" class="input" type="password" autocomplete="current-password" required></div><div class="field"><label for="newAdminPassword">Новый пароль</label><input id="newAdminPassword" class="input" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required></div><div class="field"><label for="confirmAdminPassword">Повторите пароль</label><input id="confirmAdminPassword" class="input" type="password" autocomplete="new-password" required></div><div class="field"><label for="passwordTotp">Код TOTP, если включён</label><input id="passwordTotp" class="input" inputmode="numeric" autocomplete="one-time-code" maxlength="6"></div><p class="help">Другие сессии этого аккаунта будут отозваны. API-ключи и секрет шифрования не меняются.</p><div id="passwordSetupError" class="login-error" role="alert"></div><div class="modal-actions"><button type="submit" class="btn primary">Сохранить пароль</button></div></div></form></dialog>
+
+  <dialog id="policyDialog" closedby="any" aria-labelledby="policyDialogTitle">
+    <form id="policyForm" method="post">
+      <div class="modal-head">
+        <h3 id="policyDialogTitle">Маршрутизация и лимиты ключа</h3>
+        <button type="button" class="btn icon" data-policy-close aria-label="Закрыть"><svg class="icon-svg" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <input id="policyKeyId" type="hidden">
+        <div class="field"><label for="policyProvider">Провайдер</label><select id="policyProvider" class="input"></select><div class="help">При выборе провайдера URL, протокол и модели управляются централизованно.</div></div>
+        <details>
+          <summary>Приоритет, вес, лимиты и стоимость токенов</summary>
+          <div class="form-grid">
+            <div class="field"><label for="policyPriority">Приоритет</label><input id="policyPriority" class="input" type="number" min="-1000" max="1000"></div>
+            <div class="field"><label for="policyWeight">Вес балансировки</label><input id="policyWeight" class="input" type="number" min="1" max="100"></div>
+            <div class="field"><label for="policyDailyLimit">Лимит запросов в день</label><input id="policyDailyLimit" class="input" type="number" min="0"></div>
+            <div class="field"><label for="policyBudget">Месячный бюджет, USD</label><input id="policyBudget" class="input" type="number" min="0" step="0.01"></div>
+            <div class="field"><label for="policyInputCost">Input $ / 1M токенов</label><input id="policyInputCost" class="input" type="number" min="0" step="0.0001"></div>
+            <div class="field"><label for="policyOutputCost">Output $ / 1M токенов</label><input id="policyOutputCost" class="input" type="number" min="0" step="0.0001"></div>
+          </div>
+        </details>
+        <div class="field"><label for="policyBaseURL">Upstream Base URL</label><input id="policyBaseURL" class="input" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="https://api.example.com"><div class="help">Пустое поле использует URL по умолчанию.</div></div>
+        <div class="field"><label for="policyProtocol">API-протокол</label><select id="policyProtocol" class="input"><option value="responses">Responses API</option><option value="chat-completions">Chat Completions API</option><option value="anthropic">Anthropic Messages API</option><option value="genai">Google GenAI</option></select></div>
+        <div class="field"><label for="policySpoofProfile">Профиль заголовков</label><select id="policySpoofProfile" class="input"><option value="">Автоматически</option><option value="generic">Generic OpenAI</option><option value="claude-code">Claude Code</option><option value="codex">Codex</option></select></div>
+        <div class="field"><label for="policyProxyRoute">Сетевой маршрут</label><select id="policyProxyRoute" class="input"><option value="auto">Автоматическая привязка</option><option value="direct">Напрямую (без прокси)</option></select></div>
+        <div class="field"><label for="policyModels">Разрешённые модели</label><input id="policyModels" class="input" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="model-a, model-b; пусто = все"><div class="help">Точные ID моделей через запятую или <code>*</code>.</div></div>
+        <div class="modal-actions"><button type="button" class="btn" data-policy-close>Отмена</button><button type="submit" class="btn primary">Сохранить политику</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="clientKeyDialog" closedby="any" aria-labelledby="clientKeyDialogTitle">
+    <form id="clientKeyForm" method="post">
+      <div class="modal-head">
+        <h3 id="clientKeyDialogTitle">Новый клиентский ключ</h3>
+        <button type="button" class="btn icon" data-client-close aria-label="Закрыть"><svg class="icon-svg" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <div class="field"><label for="clientKeyName">Название устройства или агента</label><input id="clientKeyName" class="input" maxlength="80" placeholder="Claude Code / Cursor" required></div>
+        <div class="help">Сгенерированный ключ подходит и для <code>Bearer</code> (OpenAI), и для <code>x-api-key</code> (Anthropic).</div>
+        <div class="modal-actions"><button type="button" class="btn" data-client-close>Отмена</button><button type="submit" class="btn primary">Сгенерировать</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="revealDialog" closedby="any" aria-labelledby="revealDialogTitle">
+    <div class="modal-head">
+      <h3 id="revealDialogTitle">Клиентский API-ключ</h3>
+      <button type="button" class="btn icon" data-reveal-close aria-label="Закрыть"><svg class="icon-svg" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="field"><label for="revealedToken">Токен доступа</label><input id="revealedToken" class="input" readonly style="font-family:ui-monospace,monospace"></div>
+      <div class="help">Укажите этот токен как API Key в вашей IDE или CLI-агенте.</div>
+      <div class="modal-actions"><button type="button" class="btn" data-reveal-close>Закрыть</button><button id="copyClientTokenBtn" type="button" class="btn primary">Скопировать ключ</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="proxyDialog" closedby="any" aria-labelledby="proxyDialogTitle">
+    <form id="proxyForm" method="post">
+      <div class="modal-head">
+        <h3 id="proxyDialogTitle">Добавить сетевой прокси</h3>
+        <button type="button" class="btn icon" data-proxy-close aria-label="Закрыть"><svg class="icon-svg" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <input id="proxyEditId" type="hidden">
+        <div class="field"><label for="proxyName">Название маршрута</label><input id="proxyName" class="input" maxlength="80" placeholder="NL SOCKS5" required></div>
+        <div class="field"><label for="proxyURL">Адрес прокси</label><input id="proxyURL" class="input" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="socks5://host:1080" required><div class="help">Формат <code>http://</code>, <code>https://</code> или <code>socks5://host:port</code> без логина в URL.</div></div>
+        <div class="form-grid">
+          <div class="field"><label for="proxyUsername">Логин</label><input id="proxyUsername" class="input" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="Опционально"></div>
+          <div class="field"><label for="proxyPassword">Пароль</label><input id="proxyPassword" class="input" type="password" autocomplete="new-password" placeholder="Опционально"></div>
+        </div>
+        <label class="check-row"><input id="proxyClearAuth" type="checkbox" class="check-input"><span>Удалить сохранённую авторизацию</span></label>
+        <p class="help">Учётные данные шифруются. Пустые поля при редактировании сохраняют текущую авторизацию.</p>
+        <label class="check-row"><input id="proxyEnabled" type="checkbox" class="check-input" checked><span>Включить маршрут</span></label>
+        <div class="modal-actions"><button type="button" class="btn" data-proxy-close>Отмена</button><button type="submit" class="btn primary">Сохранить и сбалансировать</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="providerDialog" closedby="any" aria-labelledby="providerDialogTitle">
+    <form id="providerForm" method="post">
+      <div class="modal-head">
+        <h3 id="providerDialogTitle">Добавить провайдер</h3>
+        <button type="button" class="btn icon" data-provider-close aria-label="Закрыть"><svg class="icon-svg" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <input id="providerEditId" type="hidden">
+        <div class="field"><label for="providerName">Название провайдера</label><input id="providerName" class="input" maxlength="80" required placeholder="AgentRouter / Anthropic / Gemini"></div>
+        <div class="field"><label for="providerBaseURL">API Base URL</label><input id="providerBaseURL" class="input" type="url" autocorrect="off" autocapitalize="none" spellcheck="false" required placeholder="https://agentrouter.org"></div>
+        <div class="form-grid">
+          <div class="field"><label for="providerProtocol">API-протокол</label><select id="providerProtocol" class="input"><option value="responses">Responses API</option><option value="chat-completions">Chat Completions API</option><option value="anthropic">Anthropic Messages API</option><option value="genai">Google GenAI</option></select></div>
+          <div class="field"><label for="providerProfile">Профиль заголовков</label><select id="providerProfile" class="input"><option value="">Автоматически</option><option value="generic">Generic OpenAI</option><option value="claude-code">Claude Code</option><option value="codex">Codex</option></select></div>
+        </div>
+        <div class="field"><label for="providerModels">Каталог моделей (ID)</label><textarea id="providerModels" class="input" rows="5" spellcheck="false" placeholder="claude-sonnet-4-5&#10;gpt-4.1&#10;gemini-2.5-pro"></textarea><div class="help">По одному точному ID на строку или через запятую (без <code>*</code>).</div></div>
+        <label class="check-row"><input id="providerEnabled" class="check-input" type="checkbox" checked><span>Провайдер активен</span></label>
+        <div class="modal-actions"><button type="button" class="btn" data-provider-close>Отмена</button><button type="submit" class="btn primary">Сохранить провайдер</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="editKeyDialog" closedby="any" aria-labelledby="editKeyDialogTitle">
+    <form id="editKeyForm" method="post">
+      <div class="modal-head">
+        <h3 id="editKeyDialogTitle">Редактировать API-ключ</h3>
+        <button type="button" class="btn icon" data-edit-key-close aria-label="Закрыть"><svg class="icon-svg" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <input id="editKeyId" type="hidden">
+        <div class="field"><label for="editKeyName">Название</label><input id="editKeyName" class="input" maxlength="80" required></div>
+        <p id="editKeyCurrent" class="help"></p>
+        <div class="field"><label for="editKeyValue">Новый API-ключ <span class="muted" style="font-weight:500">необязательно</span></label><input id="editKeyValue" class="input" type="password" autocomplete="new-password" minlength="8" maxlength="4096" placeholder="Оставьте пустым, чтобы не менять ключ"><div class="help">Замена сбрасывает активный cooldown и сохраняет привязки и историю токенов.</div></div>
+        <label class="check-row"><input id="editKeyEnabled" class="check-input" type="checkbox"><span>Ключ включён</span></label>
+        <div class="modal-actions"><button type="button" class="btn" data-edit-key-close>Отмена</button><button type="submit" class="btn primary">Сохранить</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="adminPasswordDialog" closedby="any" aria-labelledby="adminPasswordDialogTitle">
+    <form id="adminPasswordForm" method="post">
+      <div class="modal-head">
+        <h3 id="adminPasswordDialogTitle">Смена пароля администратора</h3>
+        <button type="button" class="btn icon" data-admin-password-close aria-label="Закрыть"><svg class="icon-svg" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <p id="adminAccountLabel" class="help" style="margin-top:0;margin-bottom:14px"></p>
+        <div class="field"><label for="currentAdminSecret">Текущий пароль</label><input id="currentAdminSecret" class="input" type="password" autocomplete="current-password" required></div>
+        <div class="field"><label for="newAdminPassword">Новый пароль (от 12 символов)</label><input id="newAdminPassword" class="input" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required></div>
+        <div class="field"><label for="confirmAdminPassword">Подтвердите новый пароль</label><input id="confirmAdminPassword" class="input" type="password" autocomplete="new-password" required></div>
+        <div class="field"><label for="passwordTotp">Код TOTP <span class="muted" style="font-weight:500">если включён</span></label><input id="passwordTotp" class="input totp-input" type="text" inputmode="numeric" autocomplete="one-time-code" autocorrect="off" autocapitalize="none" spellcheck="false" maxlength="6" placeholder="000000"></div>
+        <p class="help">Все предыдущие браузерные сессии этого аккаунта будут автоматически отозваны.</p>
+        <div id="passwordSetupError" class="login-error" role="alert" aria-live="polite"></div>
+        <div class="modal-actions"><button type="button" class="btn" data-admin-password-close>Отмена</button><button type="submit" class="btn primary">Обновить пароль</button></div>
+      </div>
+    </form>
+  </dialog>
+
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script>
     (function(){
       var session=sessionStorage.getItem('ar_admin_session')||'cookie',currentAdmin={},authState='checking';
       var login=document.getElementById('login'),loginForm=document.getElementById('loginForm'),loginError=document.getElementById('loginError');
       var dialog=document.getElementById('addDialog'),policyDialog=document.getElementById('policyDialog'),clientKeyDialog=document.getElementById('clientKeyDialog'),revealDialog=document.getElementById('revealDialog'),routingDropdown=document.getElementById('routingDropdown'),toastTimer,currentKeys=[],lastLogSeq=0,adminRole='viewer',defaultUpstream='https://agentrouter.org',currentProxies=[],currentProviders=[],activePage='overview',keyPage=0,loadSeq=0,logItems=[],logInstance="",logPaused=false,logBusy=false,logRequestFilter="",logNotice="";
+
+      var originBase=(location.protocol==='http:'||location.protocol==='https:')?location.origin:'http://127.0.0.1:8080';
+      document.getElementById('epOpenAI').textContent=originBase+'/v1';
+      document.getElementById('epAnthropic').textContent=originBase;
+      document.getElementById('epResponses').textContent=originBase+'/v1/responses';
+
       function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
       function icon(path){return '<svg class="icon-svg" viewBox="0 0 24 24"><path d="'+path+'"/></svg>'}
+      function protoBadge(proto){var p=proto||'responses';return '<span class="proto-pill proto-'+esc(p)+'">'+esc(p)+'</span>'}
       function showToast(message,error){var el=document.getElementById('toast');el.textContent=message;el.className='toast show'+(error?' error':'');clearTimeout(toastTimer);toastTimer=setTimeout(function(){el.className='toast'},3200)}
       async function api(path,options){options=options||{};options.headers=Object.assign({'Content-Type':'application/json','X-Admin-CSRF':'1'},options.headers||{});if(session&&session!=='cookie')options.headers['X-Admin-Session']=session;var response=await fetch(path,options);if(response.status===204)return null;var data=await response.json().catch(function(){return {}});if(response.status===401&&!(data.error&&data.error.code==='admin_reauth_required')){lock();var authError=new Error('Войдите в панель');authError.auth=true;throw authError}if(!response.ok)throw new Error(data.error&&data.error.message||('HTTP '+response.status));return data}
       function lock(){loadSeq++;document.querySelectorAll('dialog[open]').forEach(function(el){el.close()});document.getElementById('revealedToken').value='';document.getElementById('keyValue').value='';document.getElementById('proxyPassword').value='';document.getElementById('editKeyValue').value='';document.getElementById('adminPassword').value='';document.getElementById('adminPasswordForm').reset();logItems=[];lastLogSeq=0;logInstance='';logRequestFilter='';session='';sessionStorage.removeItem('ar_admin_session');setAuthView('login');document.getElementById('adminPassword').focus()}
-      function dateText(value){if(!value)return 'Never';return new Intl.DateTimeFormat(undefined,{dateStyle:'medium',timeStyle:'short'}).format(new Date(value))}
+      function dateText(value){if(!value)return 'Никогда';return new Intl.DateTimeFormat('ru-RU',{dateStyle:'medium',timeStyle:'short'}).format(new Date(value))}
+
       async function load(){var seq=++loadSeq;try{var status=await api('/api/admin/status');if(seq!==loadSeq)return;renderStatus(status);setAuthView('authenticated');if(activePage==='overview'){var k=await api('/api/admin/keys');if(seq===loadSeq)renderUsage(k.data||[])}else if(activePage==='credentials'){var data=await Promise.all([api('/api/admin/keys'),api('/api/admin/network-proxies'),api('/api/admin/providers')]);if(seq!==loadSeq)return;currentProxies=data[1].data||[];currentProviders=data[2].data||[];renderKeys(data[0].data||[])}else if(activePage==='providers'){var providers=await api('/api/admin/providers');if(seq===loadSeq)renderProviders(providers.data||[])}else if(activePage==='proxies'){var p=await api('/api/admin/network-proxies');if(seq===loadSeq)renderProxies(p.data||[])}else if(activePage==='clients'){var c=await api('/api/admin/client-keys');if(seq===loadSeq)renderClientKeys(c.data||[])}else{await loadLogs(true)}if(seq!==loadSeq||!session)return;login.classList.add('hidden')}catch(error){if(!error.auth){if(authState==='checking'){document.getElementById('sessionLoadingMessage').textContent='Не удалось проверить сессию. Повторите попытку.';document.getElementById('sessionRetry').hidden=false}else{showToast(error.message,true)}}}}
+
       function selectPage(page){if(!document.getElementById('page-'+page))page='overview';activePage=page;document.querySelectorAll('[data-page]').forEach(function(el){if(el.dataset.page===page)el.setAttribute('aria-current','page');else el.removeAttribute('aria-current')});document.querySelectorAll('main > section').forEach(function(el){el.hidden=el.id!=='page-'+page});if(session)load()}
       document.querySelectorAll('[data-page]').forEach(function(el){el.onclick=function(){location.hash=el.dataset.page;selectPage(el.dataset.page)}});window.addEventListener('hashchange',function(){if(activePage!==location.hash.slice(1))selectPage(location.hash.slice(1))});
       function modeLabel(mode){return {'inbound-first':'Inbound first','pool-first':'Pool first','pool-only':'Pool only'}[mode]||mode}
-      function renderStatus(s){currentAdmin=s.admin||{};document.getElementById('adminAccessBtn').textContent='Сменить пароль';document.getElementById('adminAccessBtn').disabled=!currentAdmin.password_set;document.getElementById('adminName').value=currentAdmin.name||'owner';defaultUpstream=s.upstream||'https://agentrouter.org';adminRole=s.admin&&s.admin.role||'viewer';document.querySelectorAll('#addBtn,#importBtn,#createClientKeyBtn,#addProxyBtn,#modeButton,#addProviderBtn').forEach(function(el){el.disabled=adminRole!=='admin'});document.getElementById('gatewayDot').className='dot good';document.getElementById('gatewayValue').textContent='Online';document.getElementById('wafDot').className='dot '+(s.waf_cookie?'good':'warn');document.getElementById('wafValue').textContent=s.profile==='generic'?'Not required':(s.waf_cookie?'Cookie active':(s.network_proxy_pool?'On demand per route':'Warming up'));document.getElementById('enabledValue').textContent=s.store.available+' available / '+s.store.total;document.getElementById('modeValue').textContent=modeLabel(s.selection_mode);document.querySelectorAll('[data-mode]').forEach(function(el){el.classList.toggle('active',el.dataset.mode===s.selection_mode)});document.getElementById('storeState').textContent=s.store.ready?'Encrypted store ready':(s.store.error||'Store unavailable')}
-      function renderClientKeys(keys){document.getElementById('clientKeyCount').textContent=keys.length;var content=document.getElementById('clientKeyContent');if(!keys.length){content.innerHTML='<div class="empty"><h3>No client keys</h3><p>Create a key for IDE/API access using the standard Authorization header.</p></div>';return}var rows=keys.map(function(k){return '<tr><td><div class="key-name">'+esc(k.name)+'</div><div class="key-id">'+esc(k.id)+'</div></td><td><span class="mask">'+esc(k.mask)+'</span></td><td><span class="badge '+(k.enabled?'on':'off')+'">'+(k.enabled?'Enabled':'Disabled')+'</span></td><td>'+k.uses+'</td><td class="muted">'+esc(dateText(k.last_used))+'</td><td><div class="actions"><button class="switch '+(k.enabled?'on':'')+'" data-client-toggle="'+esc(k.id)+'" data-enabled="'+k.enabled+'" aria-label="Toggle client key"><span></span></button><button class="btn icon" data-client-reveal="'+esc(k.id)+'" aria-label="Reveal client key">'+icon('M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12m10-3a3 3 0 1 0 0 6 3 3 0 0 0 0-6')+'</button><button class="btn icon danger" data-client-delete="'+esc(k.id)+'" data-name="'+esc(k.name)+'" aria-label="Delete client key">'+icon('M4 7h16M9 7V4h6v3m-9 0 1 14h10l1-14M10 11v6m4-6v6')+'</button></div></td></tr>'}).join('');content.innerHTML='<div class="table-wrap"><table><thead><tr><th>Name</th><th>API key</th><th>Status</th><th>Uses</th><th>Last used</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>';document.querySelectorAll('[data-client-toggle],[data-client-reveal],[data-client-delete]').forEach(function(el){el.disabled=adminRole!=='admin'});document.querySelectorAll('[data-client-toggle]').forEach(function(el){el.onclick=async function(){try{await api('/api/admin/client-keys/'+el.dataset.clientToggle,{method:'PATCH',body:JSON.stringify({enabled:el.dataset.enabled!=='true'})});await load()}catch(error){showToast(error.message,true)}}});document.querySelectorAll('[data-client-reveal]').forEach(function(el){el.onclick=async function(){try{var data=await api('/api/admin/client-keys/'+el.dataset.clientReveal+'/reveal',{method:'POST'});showClientToken(data.token)}catch(error){showToast(error.message,true)}}});document.querySelectorAll('[data-client-delete]').forEach(function(el){el.onclick=async function(){if(!confirm('Delete client key "'+el.dataset.name+'"?'))return;try{await api('/api/admin/client-keys/'+el.dataset.clientDelete,{method:'DELETE'});await load()}catch(error){showToast(error.message,true)}}})}
+
+      function renderStatus(s){
+        currentAdmin=s.admin||{};
+        document.getElementById('adminAccessBtn').querySelector('span').textContent='Сменить пароль';
+        document.getElementById('adminAccessBtn').disabled=!currentAdmin.password_set;
+        document.getElementById('adminName').value=currentAdmin.name||'owner';
+        defaultUpstream=s.upstream||'https://agentrouter.org';
+        adminRole=s.admin&&s.admin.role||'viewer';
+        document.querySelectorAll('#addBtn,#importBtn,#createClientKeyBtn,#addProxyBtn,#modeButton,#addProviderBtn,#probeAllBtn,#clearCacheBtn').forEach(function(el){el.disabled=adminRole!=='admin'});
+        document.getElementById('gatewayDot').className='dot good';
+        document.getElementById('gatewayValue').textContent='Онлайн';
+        document.getElementById('wafDot').className='dot '+(s.waf_cookie?'good':(s.profile==='generic'?'good':'warn'));
+        document.getElementById('wafValue').textContent=s.profile==='generic'?'Не требуется':(s.waf_cookie?'Cookie активна':(s.network_proxy_pool?'По маршрутам':'Прогрев…'));
+        document.getElementById('enabledValue').textContent=s.store.available+' доступно / '+s.store.total;
+        document.getElementById('modeValue').textContent=modeLabel(s.selection_mode);
+        document.querySelectorAll('[data-mode]').forEach(function(el){el.classList.toggle('active',el.dataset.mode===s.selection_mode)});
+        var spend=Number(s.store.monthly_spend_usd||0).toFixed(3);
+        document.getElementById('storeState').textContent=(s.store.ready?'Хранилище AES-256-GCM готово':(s.store.error||'Хранилище недоступно'))+' · Расход за месяц: $'+spend;
+        var inf=s.infrastructure||{};
+        var parts=[];
+        if(inf.postgres)parts.push('PostgreSQL');
+        if(inf.redis)parts.push('Redis');
+        if(s.state_revision)parts.push('rev #'+s.state_revision);
+        document.getElementById('infraState').textContent=parts.length?('Кластер: '+parts.join(' · ')):'Локальный режим';
+        var rc=s.response_cache||{};
+        if(rc.enabled!==undefined){
+          document.getElementById('cacheInfo').textContent=rc.enabled?('Кэш ('+(rc.backend||'memory')+'): '+(rc.hits||0)+' HIT · '+(rc.misses||0)+' MISS'):'Кэш ответов отключён';
+        }
+      }
+
+      document.querySelectorAll('[data-copy-ep]').forEach(function(btn){
+        btn.onclick=async function(){
+          var text=document.getElementById(btn.dataset.copyEp).textContent;
+          try{await navigator.clipboard.writeText(text);showToast('Скопировано: '+text)}catch(e){showToast('Не удалось скопировать',true)}
+        };
+      });
+      document.getElementById('probeAllBtn').onclick=async function(){
+        var btn=this;btn.disabled=true;
+        try{var r=await api('/api/admin/keys/probe',{method:'POST'});showToast('Проверено: '+r.checked+' · Принято: '+r.accepted+' · Ошибок: '+r.failed,r.failed>0);await load()}catch(e){showToast(e.message,true)}finally{btn.disabled=adminRole!=='admin'}
+      };
+      document.getElementById('clearCacheBtn').onclick=async function(){
+        try{await api('/api/admin/cache',{method:'DELETE'});showToast('Кэш ответов очищен');await load()}catch(e){showToast(e.message,true)}
+      };
+
+      function renderClientKeys(keys){document.getElementById('clientKeyCount').textContent=keys.length;var content=document.getElementById('clientKeyContent');if(!keys.length){content.innerHTML='<div class="empty"><div class="empty-icon">'+icon('M3 5h18v14H3zM7 15h4M7 10h10')+'</div><h3>Нет клиентских ключей</h3><p>Создайте токен доступа для Claude Code, Cursor или собственных скриптов.</p></div>';return}var rows=keys.map(function(k){return '<tr><td><div class="key-name">'+esc(k.name)+'</div><div class="key-id">'+esc(k.id)+'</div></td><td><span class="mask">'+esc(k.mask)+'</span></td><td><span class="badge '+(k.enabled?'on':'off')+'">'+(k.enabled?'Активен':'Отключён')+'</span></td><td>'+k.uses+'</td><td class="muted">'+esc(dateText(k.last_used))+'</td><td><div class="actions"><button class="switch '+(k.enabled?'on':'')+'" data-client-toggle="'+esc(k.id)+'" data-enabled="'+k.enabled+'" aria-label="Переключить клиентский ключ"><span></span></button><button class="btn icon" data-client-reveal="'+esc(k.id)+'" aria-label="Показать клиентский ключ" title="Показать ключ">'+icon('M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12m10-3a3 3 0 1 0 0 6 3 3 0 0 0 0-6')+'</button><button class="btn icon danger" data-client-delete="'+esc(k.id)+'" data-name="'+esc(k.name)+'" aria-label="Удалить клиентский ключ" title="Удалить">'+icon('M4 7h16M9 7V4h6v3m-9 0 1 14h10l1-14M10 11v6m4-6v6')+'</button></div></td></tr>'}).join('');content.innerHTML='<div class="table-wrap" tabindex="0" role="region" aria-label="Клиентские API-ключи"><table><thead><tr><th>Название</th><th>Маска ключа</th><th>Статус</th><th>Запросов</th><th>Последний вызов</th><th style="text-align:right">Действия</th></tr></thead><tbody>'+rows+'</tbody></table></div>';document.querySelectorAll('[data-client-toggle],[data-client-reveal],[data-client-delete]').forEach(function(el){el.disabled=adminRole!=='admin'});document.querySelectorAll('[data-client-toggle]').forEach(function(el){el.onclick=async function(){try{await api('/api/admin/client-keys/'+el.dataset.clientToggle,{method:'PATCH',body:JSON.stringify({enabled:el.dataset.enabled!=='true'})});await load()}catch(error){showToast(error.message,true)}}});document.querySelectorAll('[data-client-reveal]').forEach(function(el){el.onclick=async function(){try{var data=await api('/api/admin/client-keys/'+el.dataset.clientReveal+'/reveal',{method:'POST'});showClientToken(data.token)}catch(error){showToast(error.message,true)}}});document.querySelectorAll('[data-client-delete]').forEach(function(el){el.onclick=async function(){if(!confirm('Удалить клиентский ключ «'+el.dataset.name+'»?'))return;try{await api('/api/admin/client-keys/'+el.dataset.clientDelete,{method:'DELETE'});await load()}catch(error){showToast(error.message,true)}}})}
       function showClientToken(value){document.getElementById('revealedToken').value=value;revealDialog.showModal()}
-      function renderKeys(keys){currentKeys=keys;var term=document.getElementById('keySearch').value.toLowerCase();var filtered=keys.filter(function(k){return [k.name,k.provider_name,k.base_url,(k.models||[]).join(' ')].join(' ').toLowerCase().includes(term)});var pages=Math.max(1,Math.ceil(filtered.length/12));keyPage=Math.min(keyPage,pages-1);document.getElementById('keyPageLabel').textContent=(keyPage+1)+' / '+pages+' - '+filtered.length+' keys';document.getElementById('keyPrev').disabled=keyPage===0;document.getElementById('keyNext').disabled=keyPage>=pages-1;document.getElementById('keyCount').textContent=keys.length;var content=document.getElementById('keyContent');if(!keys.length){content.innerHTML='<div class="empty"><div class="empty-icon">'+icon('M14 7a4 4 0 1 0-7.5 2H3v4h3v3h3v-3h2l1.5-1.5')+'</div><h3>No stored API keys</h3><p>Add a key to enable local round-robin routing and failover.</p><button class="btn primary" id="emptyAdd">Add first key</button></div>';document.getElementById('emptyAdd').onclick=openAdd;return}var rows=filtered.slice(keyPage*12,keyPage*12+12).map(function(k){var cooling=!!k.cooldown_until;var state=k.provider_blocked?'Provider disabled':(k.network_blocked?'Route blocked':(cooling?'Cooling':(k.enabled?'Enabled':'Disabled')));var badge=k.provider_blocked||k.network_blocked||cooling?'cool':(k.enabled?'on':'off');return '<tr><td><div class="key-name">'+esc(k.name)+'</div><div class="key-id">'+esc(k.id)+'</div></td><td><div class="key-name">'+esc(k.provider_name||'Legacy endpoint')+'</div><div class="muted">'+esc(k.base_url||defaultUpstream)+' · '+esc(k.api_protocol||'responses')+'</div><div class="route-label">'+esc(routeLabel(k))+'</div></td><td><span class="mask">'+esc(k.mask)+'</span></td><td><span class="badge '+badge+'"><span class="dot '+(cooling?'warn':(k.enabled?'good':''))+'"></span>'+state+'</span></td><td><div>'+k.uses+' requests</div><div class="muted" style="font-size:11px;margin-top:4px">'+k.failures+' failures</div></td><td class="muted">'+esc(cooling?('Until '+dateText(k.cooldown_until)):dateText(k.last_used))+'</td><td><div class="actions"><button class="switch '+(k.enabled?'on':'')+'" data-toggle="'+esc(k.id)+'" data-enabled="'+k.enabled+'" aria-pressed="'+k.enabled+'" aria-label="'+(k.enabled?'Disable':'Enable')+' '+esc(k.name)+'"><span></span></button><button class="btn" data-edit-key="'+esc(k.id)+'" aria-label="Редактировать '+esc(k.name)+'">Edit</button><button class="btn icon" data-policy="'+esc(k.id)+'" aria-label="Edit policy for '+esc(k.name)+'"'+(adminRole==='admin'?'':' disabled')+'>'+icon('M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6')+'</button><button class="btn icon" data-test="'+esc(k.id)+'" aria-label="Test '+esc(k.name)+'">'+icon('M5 12h14M13 6l6 6-6 6')+'</button><button class="btn icon danger" data-delete="'+esc(k.id)+'" data-name="'+esc(k.name)+'" aria-label="Delete '+esc(k.name)+'">'+icon('M4 7h16M9 7V4h6v3m-9 0 1 14h10l1-14M10 11v6m4-6v6')+'</button></div></td></tr>'}).join('');content.innerHTML='<div class="table-wrap"><table><thead><tr><th>Name</th><th>Provider / route</th><th>Credential</th><th>Status</th><th>Usage</th><th>Last used</th><th style="text-align:right">Actions</th></tr></thead><tbody>'+rows+'</tbody></table></div>';bindRows()}
-      function renderUsage(keys){keys=keys.slice().sort(function(a,b){return (b.uses||0)-(a.uses||0)}).slice(0,8);var el=document.getElementById('usageChart');if(!keys.length){el.innerHTML='<div class="muted">No usage yet</div>';return}var maxUses=Math.max.apply(null,keys.map(function(k){return k.uses||0}).concat([1]));el.innerHTML=keys.map(function(k){var pct=Math.max(2,Math.round((k.uses||0)*100/maxUses));return '<div class="chart-row"><span class="chart-name">'+esc(k.name)+'</span><div class="bar-track"><div class="bar-fill" style="width:'+pct+'%"></div></div><span>'+k.uses+' / $'+Number(k.monthly_spend_usd||0).toFixed(3)+'</span></div>'}).join('')}
-      function bindRows(){document.querySelectorAll('[data-edit-key]').forEach(function(el){el.onclick=function(){openEditKey(el.dataset.editKey)}});document.querySelectorAll('[data-toggle],[data-test],[data-delete],[data-edit-key]').forEach(function(el){el.disabled=adminRole!=='admin'});document.querySelectorAll('[data-policy]').forEach(function(el){el.onclick=function(){openPolicy(el.dataset.policy)}});document.querySelectorAll('[data-toggle]').forEach(function(el){el.onclick=async function(){el.disabled=true;try{await api('/api/admin/keys/'+el.dataset.toggle,{method:'PATCH',body:JSON.stringify({enabled:el.dataset.enabled!=='true'})});showToast('Key status updated');await load()}catch(e){showToast(e.message,true)}finally{el.disabled=false}}});document.querySelectorAll('[data-test]').forEach(function(el){el.onclick=async function(){el.disabled=true;try{var result=await api('/api/admin/keys/'+el.dataset.test+'/test',{method:'POST'});showToast(result.inconclusive?result.message:(result.ok?result.message+' ('+result.duration_ms+' ms)':result.message),!result.ok&&!result.inconclusive);await load()}catch(e){showToast(e.message,true)}finally{el.disabled=false}}});document.querySelectorAll('[data-delete]').forEach(function(el){el.onclick=async function(){if(!confirm('Delete "'+el.dataset.name+'"? This cannot be undone.'))return;el.disabled=true;try{await api('/api/admin/keys/'+el.dataset.delete,{method:'DELETE'});showToast('Key deleted');await load()}catch(e){showToast(e.message,true)}finally{el.disabled=false}}})}
-      function openAdd(){if(adminRole!=='admin')return;if(!currentProviders.some(function(p){return p.enabled})){selectPage('providers');showToast('Add an enabled provider before creating an API key',true);return;}document.getElementById('addForm').reset();document.getElementById('keyEnabled').checked=true;document.getElementById('keyBaseURL').value=defaultUpstream;fillRoutes('keyProxyRoute','auto');fillProviders('keyProvider',null,false);applyProvider('key');dialog.showModal();setTimeout(function(){document.getElementById('keyName').focus()},30)}
+
+      function renderKeys(keys){currentKeys=keys;var term=document.getElementById('keySearch').value.toLowerCase();var filtered=keys.filter(function(k){return [k.name,k.provider_name,k.base_url,(k.models||[]).join(' ')].join(' ').toLowerCase().includes(term)});var pages=Math.max(1,Math.ceil(filtered.length/12));keyPage=Math.min(keyPage,pages-1);document.getElementById('keyPageLabel').textContent=(keyPage+1)+' / '+pages+' · '+filtered.length+' ключей';document.getElementById('keyPrev').disabled=keyPage===0;document.getElementById('keyNext').disabled=keyPage>=pages-1;document.getElementById('keyCount').textContent=keys.length;var content=document.getElementById('keyContent');if(!keys.length){content.innerHTML='<div class="empty"><div class="empty-icon">'+icon('M14 7a4 4 0 1 0-7.5 2H3v4h3v3h3v-3h2l1.5-1.5')+'</div><h3>Нет сохранённых ключей</h3><p>Добавьте API-ключ провайдера для балансировки и автоматического failover.</p><button class="btn primary" id="emptyAdd" type="button">Добавить первый ключ</button></div>';document.getElementById('emptyAdd').onclick=openAdd;return}var rows=filtered.slice(keyPage*12,keyPage*12+12).map(function(k){var cooling=!!k.cooldown_until;var state=k.provider_blocked?'Провайдер откл.':(k.network_blocked?'Маршрут недоступен':(cooling?'Cooldown':(k.enabled?'Активен':'Отключён')));var badge=k.provider_blocked||k.network_blocked||cooling?'cool':(k.enabled?'on':'off');return '<tr><td><div class="key-name">'+esc(k.name)+'</div><div class="key-id">'+esc(k.id)+'</div></td><td><div class="key-name">'+esc(k.provider_name||'Legacy endpoint')+'</div><div class="muted" style="font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span>'+esc(k.base_url||defaultUpstream)+'</span>'+protoBadge(k.api_protocol||'responses')+'</div><div class="route-label">'+esc(routeLabel(k))+'</div></td><td><span class="mask">'+esc(k.mask)+'</span></td><td><span class="badge '+badge+'"><span class="dot '+(cooling?'warn':(k.enabled?'good':''))+'"></span>'+state+'</span></td><td><div>'+k.uses+' запр.</div><div class="muted" style="font-size:11px;margin-top:3px">'+k.failures+' ошибок</div></td><td class="muted">'+esc(cooling?('До '+dateText(k.cooldown_until)):dateText(k.last_used))+'</td><td><div class="actions"><button class="switch '+(k.enabled?'on':'')+'" data-toggle="'+esc(k.id)+'" data-enabled="'+k.enabled+'" aria-pressed="'+k.enabled+'" aria-label="'+(k.enabled?'Отключить':'Включить')+' '+esc(k.name)+'"><span></span></button><button class="btn sm" data-edit-key="'+esc(k.id)+'" aria-label="Редактировать '+esc(k.name)+'">Ключ</button><button class="btn icon" data-policy="'+esc(k.id)+'" title="Лимиты и маршрутизация" aria-label="Политика '+esc(k.name)+'"'+(adminRole==='admin'?'':' disabled')+'>'+icon('M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6')+'</button><button class="btn icon" data-test="'+esc(k.id)+'" title="Проверить ключ" aria-label="Проверить '+esc(k.name)+'">'+icon('M5 12h14M13 6l6 6-6 6')+'</button><button class="btn icon danger" data-delete="'+esc(k.id)+'" data-name="'+esc(k.name)+'" title="Удалить" aria-label="Удалить '+esc(k.name)+'">'+icon('M4 7h16M9 7V4h6v3m-9 0 1 14h10l1-14M10 11v6m4-6v6')+'</button></div></td></tr>'}).join('');content.innerHTML='<div class="table-wrap" tabindex="0" role="region" aria-label="API-ключи провайдеров"><table><thead><tr><th>Название</th><th>Провайдер и маршрут</th><th>Маска</th><th>Статус</th><th>Трафик</th><th>Активность</th><th style="text-align:right">Действия</th></tr></thead><tbody>'+rows+'</tbody></table></div>';bindRows()}
+
+      function renderUsage(keys){keys=keys.slice().sort(function(a,b){return (b.uses||0)-(a.uses||0)}).slice(0,8);var el=document.getElementById('usageChart');if(!keys.length){el.innerHTML='<div class="muted">Запросов через пул пока не было</div>';return}var maxUses=Math.max.apply(null,keys.map(function(k){return k.uses||0}).concat([1]));el.innerHTML=keys.map(function(k){var pct=Math.max(3,Math.round((k.uses||0)*100/maxUses));return '<div class="chart-row"><span class="chart-name">'+esc(k.name)+'</span><div class="bar-track"><div class="bar-fill" style="width:'+pct+'%"></div></div><span class="chart-stat">'+k.uses+' · $'+Number(k.monthly_spend_usd||0).toFixed(3)+'</span></div>'}).join('')}
+
+      function bindRows(){document.querySelectorAll('[data-edit-key]').forEach(function(el){el.onclick=function(){openEditKey(el.dataset.editKey)}});document.querySelectorAll('[data-toggle],[data-test],[data-delete],[data-edit-key]').forEach(function(el){el.disabled=adminRole!=='admin'});document.querySelectorAll('[data-policy]').forEach(function(el){el.onclick=function(){openPolicy(el.dataset.policy)}});document.querySelectorAll('[data-toggle]').forEach(function(el){el.onclick=async function(){el.disabled=true;try{await api('/api/admin/keys/'+el.dataset.toggle,{method:'PATCH',body:JSON.stringify({enabled:el.dataset.enabled!=='true'})});showToast('Статус ключа обновлён');await load()}catch(e){showToast(e.message,true)}finally{el.disabled=false}}});document.querySelectorAll('[data-test]').forEach(function(el){el.onclick=async function(){el.disabled=true;try{var result=await api('/api/admin/keys/'+el.dataset.test+'/test',{method:'POST'});showToast(result.inconclusive?result.message:(result.ok?result.message+' ('+result.duration_ms+' мс)':result.message),!result.ok&&!result.inconclusive);await load()}catch(e){showToast(e.message,true)}finally{el.disabled=false}}});document.querySelectorAll('[data-delete]').forEach(function(el){el.onclick=async function(){if(!confirm('Удалить ключ «'+el.dataset.name+'»? Это действие необратимо.'))return;el.disabled=true;try{await api('/api/admin/keys/'+el.dataset.delete,{method:'DELETE'});showToast('Ключ удалён');await load()}catch(e){showToast(e.message,true)}finally{el.disabled=false}}})}
+      function openAdd(){if(adminRole!=='admin')return;if(!currentProviders.some(function(p){return p.enabled})){selectPage('providers');showToast('Сначала добавьте активный провайдер',true);return;}document.getElementById('addForm').reset();document.getElementById('keyEnabled').checked=true;document.getElementById('keyBaseURL').value=defaultUpstream;fillRoutes('keyProxyRoute','auto');fillProviders('keyProvider',null,false);applyProvider('key');dialog.showModal();setTimeout(function(){document.getElementById('keyName').focus()},30)}
 
       function openPolicy(id){var k=currentKeys.find(function(item){return item.id===id});if(!k)return;document.getElementById('policyKeyId').value=id;document.getElementById('policyPriority').value=k.priority||0;document.getElementById('policyWeight').value=k.weight||1;document.getElementById('policyDailyLimit').value=k.daily_request_limit||0;document.getElementById('policyBudget').value=k.monthly_budget_usd||0;document.getElementById('policyInputCost').value=k.input_cost_per_million||0;document.getElementById('policyOutputCost').value=k.output_cost_per_million||0;document.getElementById('policyModels').value=(k.models||[]).join(', ');document.getElementById('policyBaseURL').value=k.base_url||'';document.getElementById('policySpoofProfile').value=k.spoof_profile||'';document.getElementById('policyProtocol').value=k.api_protocol||'responses';fillRoutes('policyProxyRoute',k.proxy_mode==='fixed'?k.proxy_id:(k.proxy_mode||'auto'));fillProviders('policyProvider',k.provider_id||'',true);applyProvider('policy');policyDialog.showModal()}
-      document.getElementById('policyForm').onsubmit=async function(e){e.preventDefault();var id=document.getElementById('policyKeyId').value;var policy=Object.assign(binding('policyProxyRoute'),{provider_id:document.getElementById('policyProvider').value,priority:Number(document.getElementById('policyPriority').value||0),weight:Number(document.getElementById('policyWeight').value||1),daily_request_limit:Number(document.getElementById('policyDailyLimit').value||0),monthly_budget_usd:Number(document.getElementById('policyBudget').value||0),input_cost_per_million:Number(document.getElementById('policyInputCost').value||0),output_cost_per_million:Number(document.getElementById('policyOutputCost').value||0),models:document.getElementById('policyModels').value.split(',').map(function(v){return v.trim()}).filter(Boolean),base_url:document.getElementById('policyBaseURL').value.trim(),api_protocol:document.getElementById('policyProtocol').value,spoof_profile:document.getElementById('policySpoofProfile').value});try{await api('/api/admin/keys/'+id+'/policy',{method:'PATCH',body:JSON.stringify(policy)});policyDialog.close();showToast('Key policy updated');await load()}catch(error){showToast(error.message,true)}};
-      document.querySelectorAll('[data-policy-close]').forEach(function(el){el.onclick=function(){policyDialog.close()}});policyDialog.addEventListener('click',function(e){if(e.target===policyDialog)policyDialog.close()});
-      document.getElementById('exportBtn').onclick=async function(){try{var headers={};if(session&&session!=='cookie')headers['X-Admin-Session']=session;var response=await fetch('/api/admin/backup',{credentials:'same-origin',headers:headers});if(response.status===401){lock();return}if(!response.ok)throw new Error('Backup export failed');var blob=await response.blob();var link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='agentrouter-keys-backup.json';link.click();URL.revokeObjectURL(link.href)}catch(error){showToast(error.message,true)}};
-      document.getElementById('importBtn').onclick=function(){document.getElementById('importFile').click()};document.getElementById('importFile').onchange=async function(){if(!this.files[0])return;if(!confirm('Replace the current encrypted key pool with this backup?'))return;try{var response=await fetch('/api/admin/backup',{method:'POST',headers:Object.assign({'X-Admin-CSRF':'1','Content-Type':'application/json'},session&&session!=='cookie'?{'X-Admin-Session':session}:{}),credentials:'same-origin',body:await this.files[0].text()});if(response.status===401){lock();return}var data=await response.json().catch(function(){return {}});if(!response.ok)throw new Error(data.error&&data.error.message||'Import failed');showToast('Backup imported');await load()}catch(error){showToast(error.message,true)}finally{this.value=''}};
+      document.getElementById('policyForm').onsubmit=async function(e){e.preventDefault();var id=document.getElementById('policyKeyId').value;var policy=Object.assign(binding('policyProxyRoute'),{provider_id:document.getElementById('policyProvider').value,priority:Number(document.getElementById('policyPriority').value||0),weight:Number(document.getElementById('policyWeight').value||1),daily_request_limit:Number(document.getElementById('policyDailyLimit').value||0),monthly_budget_usd:Number(document.getElementById('policyBudget').value||0),input_cost_per_million:Number(document.getElementById('policyInputCost').value||0),output_cost_per_million:Number(document.getElementById('policyOutputCost').value||0),models:document.getElementById('policyModels').value.split(',').map(function(v){return v.trim()}).filter(Boolean),base_url:document.getElementById('policyBaseURL').value.trim(),api_protocol:document.getElementById('policyProtocol').value,spoof_profile:document.getElementById('policySpoofProfile').value});try{await api('/api/admin/keys/'+id+'/policy',{method:'PATCH',body:JSON.stringify(policy)});policyDialog.close();showToast('Политика ключа сохранена');await load()}catch(error){showToast(error.message,true)}};
+      document.querySelectorAll('[data-policy-close]').forEach(function(el){el.onclick=function(){policyDialog.close()}});
 
-      document.getElementById('createClientKeyBtn').onclick=function(){document.getElementById('clientKeyForm').reset();clientKeyDialog.showModal();document.getElementById('clientKeyName').focus()};document.getElementById('clientKeyForm').onsubmit=async function(e){e.preventDefault();try{var data=await api('/api/admin/client-keys',{method:'POST',body:JSON.stringify({name:document.getElementById('clientKeyName').value})});clientKeyDialog.close();showClientToken(data.token);await load()}catch(error){showToast(error.message,true)}};document.querySelectorAll('[data-client-close]').forEach(function(el){el.onclick=function(){clientKeyDialog.close()}});document.querySelectorAll('[data-reveal-close]').forEach(function(el){el.onclick=function(){revealDialog.close()}});clientKeyDialog.addEventListener('click',function(e){if(e.target===clientKeyDialog)clientKeyDialog.close()});revealDialog.addEventListener('click',function(e){if(e.target===revealDialog)revealDialog.close()});document.getElementById('copyClientTokenBtn').onclick=async function(){try{await navigator.clipboard.writeText(document.getElementById('revealedToken').value);showToast('Client API key copied')}catch(error){showToast('Copy failed',true)}};
+      document.getElementById('exportBtn').onclick=async function(){try{var headers={};if(session&&session!=='cookie')headers['X-Admin-Session']=session;var response=await fetch('/api/admin/backup',{credentials:'same-origin',headers:headers});if(response.status===401){lock();return}if(!response.ok)throw new Error('Ошибка экспорта бэкапа');var blob=await response.blob();var link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='agentrouter-keys-backup.json';link.click();URL.revokeObjectURL(link.href)}catch(error){showToast(error.message,true)}};
+      document.getElementById('importBtn').onclick=function(){document.getElementById('importFile').click()};document.getElementById('importFile').onchange=async function(){if(!this.files[0])return;if(!confirm('Заменить текущий зашифрованный пул ключей выбранной резервной копией?'))return;try{var response=await fetch('/api/admin/backup',{method:'POST',headers:Object.assign({'X-Admin-CSRF':'1','Content-Type':'application/json'},session&&session!=='cookie'?{'X-Admin-Session':session}:{}),credentials:'same-origin',body:await this.files[0].text()});if(response.status===401){lock();return}var data=await response.json().catch(function(){return {}});if(!response.ok)throw new Error(data.error&&data.error.message||'Ошибка импорта');showToast('Резервная копия импортирована');await load()}catch(error){showToast(error.message,true)}finally{this.value=''}};
+
+      document.getElementById('createClientKeyBtn').onclick=function(){document.getElementById('clientKeyForm').reset();clientKeyDialog.showModal();document.getElementById('clientKeyName').focus()};document.getElementById('clientKeyForm').onsubmit=async function(e){e.preventDefault();try{var data=await api('/api/admin/client-keys',{method:'POST',body:JSON.stringify({name:document.getElementById('clientKeyName').value})});clientKeyDialog.close();showClientToken(data.token);await load()}catch(error){showToast(error.message,true)}};document.querySelectorAll('[data-client-close]').forEach(function(el){el.onclick=function(){clientKeyDialog.close()}});document.querySelectorAll('[data-reveal-close]').forEach(function(el){el.onclick=function(){revealDialog.close()}});document.getElementById('copyClientTokenBtn').onclick=async function(){try{await navigator.clipboard.writeText(document.getElementById('revealedToken').value);showToast('Клиентский ключ скопирован')}catch(error){showToast('Не удалось скопировать',true)}};
+
+      // Mandatory fallback for browsers without declarative <dialog closedby="any">
+      if(!('closedBy' in HTMLDialogElement.prototype)){
+        document.querySelectorAll('dialog[closedby="any"]').forEach(function(dlg){
+          dlg.addEventListener('click',function(event){
+            if(event.target!==dlg)return;
+            var rect=dlg.getBoundingClientRect();
+            var inside=rect.top<=event.clientY&&event.clientY<=rect.top+rect.height&&rect.left<=event.clientX&&event.clientX<=rect.left+rect.width;
+            if(!inside)dlg.close();
+          });
+        });
+      }
+
       function closeDropdown(){routingDropdown.classList.remove('open');document.getElementById('modeButton').setAttribute('aria-expanded','false')}
+      ['adminName','adminPassword','adminTotp'].forEach(function(id){
+        document.getElementById(id).addEventListener('input',function(){if(loginError.textContent)loginError.textContent=''});
+      });
       loginForm.onsubmit=async function(e){
         e.preventDefault();var button=document.getElementById('loginSubmit');button.disabled=true;loginError.textContent='';
         try{
@@ -127,26 +2061,32 @@
         }catch(error){loginError.textContent=error.message}finally{button.disabled=false}
       };
       document.getElementById('lockBtn').onclick=async function(){try{await api('/api/admin/logout',{method:'POST'});lock()}catch(e){if(!e.auth)showToast('Не удалось отозвать сессию: '+e.message,true)}};
-      document.getElementById('refreshBtn').onclick=load;document.getElementById('addBtn').onclick=openAdd;document.getElementById('modeButton').onclick=function(e){e.stopPropagation();var open=routingDropdown.classList.toggle('open');this.setAttribute('aria-expanded',String(open))};document.querySelectorAll('[data-mode]').forEach(function(el){el.onclick=async function(){closeDropdown();try{await api('/api/admin/settings',{method:'PATCH',body:JSON.stringify({selection_mode:el.dataset.mode})});showToast('Routing policy updated');await load()}catch(error){showToast(error.message,true)}}});document.querySelectorAll('[data-close]').forEach(function(el){el.onclick=function(){dialog.close()}});dialog.addEventListener('click',function(e){if(e.target===dialog)dialog.close()});document.addEventListener('click',function(e){if(!routingDropdown.contains(e.target))closeDropdown()});document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeDropdown();if(dialog.open)dialog.close();if(policyDialog.open)policyDialog.close();if(clientKeyDialog.open)clientKeyDialog.close();if(revealDialog.open)revealDialog.close()}});document.getElementById('addForm').onsubmit=async function(e){e.preventDefault();var button=document.getElementById('saveKeyBtn');button.disabled=true;try{await api('/api/admin/keys',{method:'POST',body:JSON.stringify({name:document.getElementById('keyName').value,key:document.getElementById('keyValue').value,enabled:document.getElementById('keyEnabled').checked,policy:Object.assign(binding('keyProxyRoute'),{provider_id:document.getElementById('keyProvider').value,base_url:document.getElementById('keyBaseURL').value.trim(),api_protocol:document.getElementById('keyProtocol').value,spoof_profile:document.getElementById('keySpoofProfile').value,weight:1})})});dialog.close();showToast('API key encrypted and saved');document.getElementById('keyValue').value='';await load()}catch(error){showToast(error.message,true)}finally{button.disabled=false}};
-      function fillProviders(id,selected,legacy){var el=document.getElementById(id);el.innerHTML=(legacy?'<option value="">Legacy per-key endpoint</option>':'')+currentProviders.filter(function(p){return p.enabled||p.id===selected}).map(function(p){return '<option value="'+esc(p.id)+'">'+esc(p.name)+(p.enabled?'':' (disabled)')+'</option>'}).join('');if(selected!==null)el.value=selected;el.required=!legacy}
+      document.getElementById('refreshBtn').onclick=load;document.getElementById('addBtn').onclick=openAdd;document.getElementById('modeButton').onclick=function(e){e.stopPropagation();var open=routingDropdown.classList.toggle('open');this.setAttribute('aria-expanded',String(open))};document.querySelectorAll('[data-mode]').forEach(function(el){el.onclick=async function(){closeDropdown();try{await api('/api/admin/settings',{method:'PATCH',body:JSON.stringify({selection_mode:el.dataset.mode})});showToast('Режим маршрутизации обновлён');await load()}catch(error){showToast(error.message,true)}}});document.querySelectorAll('[data-close]').forEach(function(el){el.onclick=function(){dialog.close()}});document.addEventListener('click',function(e){if(!routingDropdown.contains(e.target))closeDropdown()});document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeDropdown()}});
+      document.getElementById('addForm').onsubmit=async function(e){e.preventDefault();var button=document.getElementById('saveKeyBtn');button.disabled=true;try{await api('/api/admin/keys',{method:'POST',body:JSON.stringify({name:document.getElementById('keyName').value,key:document.getElementById('keyValue').value,enabled:document.getElementById('keyEnabled').checked,policy:Object.assign(binding('keyProxyRoute'),{provider_id:document.getElementById('keyProvider').value,base_url:document.getElementById('keyBaseURL').value.trim(),api_protocol:document.getElementById('keyProtocol').value,spoof_profile:document.getElementById('keySpoofProfile').value,weight:1})})});dialog.close();showToast('API-ключ зашифрован и сохранён');document.getElementById('keyValue').value='';await load()}catch(error){showToast(error.message,true)}finally{button.disabled=false}};
+
+      function fillProviders(id,selected,legacy){var el=document.getElementById(id);el.innerHTML=(legacy?'<option value="">Legacy endpoint ключа</option>':'')+currentProviders.filter(function(p){return p.enabled||p.id===selected}).map(function(p){return '<option value="'+esc(p.id)+'">'+esc(p.name)+(p.enabled?'':' (откл.)')+'</option>'}).join('');if(selected!==null)el.value=selected;el.required=!legacy}
       function applyProvider(prefix){var id=document.getElementById(prefix+'Provider').value,p=currentProviders.find(function(p){return p.id===id});var fields=['BaseURL','Protocol','SpoofProfile'];if(prefix==='policy')fields.push('Models');fields.forEach(function(field){var el=document.getElementById(prefix+field);el.closest('.field').hidden=!!p;el.disabled=!!p});if(p){document.getElementById(prefix+'BaseURL').value=p.base_url;document.getElementById(prefix+'Protocol').value=p.api_protocol;document.getElementById(prefix+'SpoofProfile').value=p.spoof_profile||'';if(prefix==='policy')document.getElementById('policyModels').value=(p.models||[]).join(', ')}}
       document.getElementById('keyProvider').onchange=function(){applyProvider('key')};document.getElementById('policyProvider').onchange=function(){applyProvider('policy')};
-      function handleProtocolChange(protocolElId, urlElId, fallback){var proto=document.getElementById(protocolElId).value, urlEl=document.getElementById(urlElId);if(proto==='genai'&&(!urlEl.value||urlEl.value===defaultUpstream||urlEl.value==='https://agentrouter.org')){urlEl.value='https://generativelanguage.googleapis.com'}else if(proto!=='genai'&&urlEl.value==='https://generativelanguage.googleapis.com'){urlEl.value=fallback}}
+      function handleProtocolChange(protocolElId, urlElId, fallback){var proto=document.getElementById(protocolElId).value, urlEl=document.getElementById(urlElId), knownDefaults=['',defaultUpstream,'https://agentrouter.org','https://generativelanguage.googleapis.com','https://api.anthropic.com'];if(knownDefaults.indexOf(urlEl.value)===-1)return;if(proto==='genai')urlEl.value='https://generativelanguage.googleapis.com';else if(proto==='anthropic')urlEl.value='https://api.anthropic.com';else urlEl.value=fallback}
       document.getElementById('keyProtocol').onchange=function(){handleProtocolChange('keyProtocol','keyBaseURL',defaultUpstream)};document.getElementById('policyProtocol').onchange=function(){handleProtocolChange('policyProtocol','policyBaseURL','')};document.getElementById('providerProtocol').onchange=function(){handleProtocolChange('providerProtocol','providerBaseURL',defaultUpstream)};
+
       var providerDialog=document.getElementById('providerDialog');
-      function openProvider(id){if(adminRole!=='admin')return;document.getElementById('providerForm').reset();var p=currentProviders.find(function(p){return p.id===id});document.getElementById('providerEditId').value=id||'';document.getElementById('providerName').value=p?p.name:'';document.getElementById('providerBaseURL').value=p?p.base_url:defaultUpstream;document.getElementById('providerProtocol').value=p?p.api_protocol:'responses';document.getElementById('providerProfile').value=p?p.spoof_profile||'':'';document.getElementById('providerModels').value=p?(p.models||[]).join('\n'):'';document.getElementById('providerEnabled').checked=p?p.enabled:true;document.getElementById('providerDialogTitle').textContent=p?'Edit provider and models':'Add provider';providerDialog.showModal()}
+      function openProvider(id){if(adminRole!=='admin')return;document.getElementById('providerForm').reset();var p=currentProviders.find(function(p){return p.id===id});document.getElementById('providerEditId').value=id||'';document.getElementById('providerName').value=p?p.name:'';document.getElementById('providerBaseURL').value=p?p.base_url:defaultUpstream;document.getElementById('providerProtocol').value=p?p.api_protocol:'responses';document.getElementById('providerProfile').value=p?p.spoof_profile||'':'';document.getElementById('providerModels').value=p?(p.models||[]).join('\n'):'';document.getElementById('providerEnabled').checked=p?p.enabled:true;document.getElementById('providerDialogTitle').textContent=p?'Редактировать провайдер':'Добавить провайдер';providerDialog.showModal()}
       document.getElementById('addProviderBtn').onclick=function(){openProvider('')};document.querySelectorAll('[data-provider-close]').forEach(function(el){el.onclick=function(){providerDialog.close()}});
-      document.getElementById('providerForm').onsubmit=async function(e){e.preventDefault();var button=this.querySelector('[type="submit"]');button.disabled=true;try{var id=document.getElementById('providerEditId').value;var input={name:document.getElementById('providerName').value,base_url:document.getElementById('providerBaseURL').value.trim(),api_protocol:document.getElementById('providerProtocol').value,spoof_profile:document.getElementById('providerProfile').value,models:document.getElementById('providerModels').value.split(/[\n,]/).map(function(v){return v.trim()}).filter(Boolean),enabled:document.getElementById('providerEnabled').checked};await api('/api/admin/providers'+(id?'/'+id:''),{method:id?'PATCH':'POST',body:JSON.stringify(input)});providerDialog.close();showToast('Provider and model routing saved');await load()}catch(e){showToast(e.message,true)}finally{button.disabled=false}};
-      function renderProviders(providers){currentProviders=providers;var content=document.getElementById('providerContent');if(!providers.length){content.innerHTML='<div class="card empty"><h3>No providers yet</h3><p>Add your API endpoint and its model IDs, then select it when adding credentials. Existing legacy keys remain intact.</p></div>';return}content.innerHTML=providers.map(function(p){return '<article class="card"><div class="card-head"><h3>'+esc(p.name)+'</h3><span class="badge '+(p.enabled?'on':'off')+'">'+(p.enabled?'Enabled':'Disabled')+'</span></div><div class="provider-body"><div class="provider-endpoint">'+esc(p.base_url)+'<br>'+esc(p.api_protocol)+' · '+p.keys+' keys · '+p.models.length+' models</div><div class="model-list">'+(p.models.length?p.models.map(function(m){return '<span class="model-chip">'+esc(m)+'</span>'}).join(''):'<span class="muted">No generation models configured</span>')+'</div><div class="modal-actions"><button class="btn" data-provider-edit="'+esc(p.id)+'">Edit models</button><button class="btn danger" data-provider-delete="'+esc(p.id)+'">Delete</button></div></div></article>'}).join('');content.querySelectorAll('button').forEach(function(el){el.disabled=adminRole!=='admin'});content.querySelectorAll('[data-provider-edit]').forEach(function(el){el.onclick=function(){openProvider(el.dataset.providerEdit)}});content.querySelectorAll('[data-provider-delete]').forEach(function(el){el.onclick=async function(){if(!confirm('Delete provider? Linked API keys must be reassigned first.'))return;try{await api('/api/admin/providers/'+el.dataset.providerDelete,{method:'DELETE'});showToast('Provider deleted');await load()}catch(e){showToast(e.message,true)}}})}
+      document.getElementById('providerForm').onsubmit=async function(e){e.preventDefault();var button=this.querySelector('[type="submit"]');button.disabled=true;try{var id=document.getElementById('providerEditId').value;var input={name:document.getElementById('providerName').value,base_url:document.getElementById('providerBaseURL').value.trim(),api_protocol:document.getElementById('providerProtocol').value,spoof_profile:document.getElementById('providerProfile').value,models:document.getElementById('providerModels').value.split(/[\n,]/).map(function(v){return v.trim()}).filter(Boolean),enabled:document.getElementById('providerEnabled').checked};await api('/api/admin/providers'+(id?'/'+id:''),{method:id?'PATCH':'POST',body:JSON.stringify(input)});providerDialog.close();showToast('Провайдер и каталог моделей сохранены');await load()}catch(e){showToast(e.message,true)}finally{button.disabled=false}};
+      function renderProviders(providers){currentProviders=providers;var content=document.getElementById('providerContent');if(!providers.length){content.innerHTML='<div class="card empty"><div class="empty-icon">'+icon('M12 3 3 8l9 5 9-5-9-5ZM3 12l9 5 9-5')+'</div><h3>Провайдеры ещё не добавлены</h3><p>Создайте провайдер с URL и списком моделей, чтобы привязывать к нему API-ключи.</p></div>';return}content.innerHTML=providers.map(function(p){return '<article class="card"><div class="card-head"><h3>'+esc(p.name)+'</h3><span class="badge '+(p.enabled?'on':'off')+'">'+(p.enabled?'Активен':'Отключён')+'</span></div><div class="provider-body"><div class="provider-endpoint"><span class="provider-url">'+esc(p.base_url)+'</span><br>'+protoBadge(p.api_protocol)+' · '+p.keys+' ключей · '+p.models.length+' моделей</div><div class="model-list">'+(p.models.length?p.models.map(function(m){return '<span class="model-chip">'+esc(m)+'</span>'}).join(''):'<span class="muted">Модели не заданы</span>')+'</div><div class="modal-actions"><button class="btn sm" type="button" data-provider-edit="'+esc(p.id)+'">Настроить модели</button><button class="btn sm danger" type="button" data-provider-delete="'+esc(p.id)+'">Удалить</button></div></div></article>'}).join('');content.querySelectorAll('button').forEach(function(el){el.disabled=adminRole!=='admin'});content.querySelectorAll('[data-provider-edit]').forEach(function(el){el.onclick=function(){openProvider(el.dataset.providerEdit)}});content.querySelectorAll('[data-provider-delete]').forEach(function(el){el.onclick=async function(){if(!confirm('Удалить провайдер? Сначала переназначьте привязанные ключи.'))return;try{await api('/api/admin/providers/'+el.dataset.providerDelete,{method:'DELETE'});showToast('Провайдер удалён');await load()}catch(e){showToast(e.message,true)}}})}
+
       function binding(id){var value=document.getElementById(id).value;return {proxy_mode:value==='auto'||value==='direct'?value:'fixed',proxy_id:value==='auto'||value==='direct'?'':value}}
-      function fillRoutes(id,value){var el=document.getElementById(id);el.innerHTML='<option value="auto">Automatic binding</option><option value="direct">Direct (no proxy)</option>'+currentProxies.map(function(p){return '<option value="'+esc(p.id)+'">'+esc(p.name)+(p.enabled?'':' (disabled)')+'</option>'}).join('');el.value=value||'auto'}
-      function routeLabel(k){if(k.proxy_mode==='direct')return 'Direct';var p=currentProxies.find(function(p){return p.id===k.proxy_id});return (k.proxy_mode==='fixed'?'Pinned: ':'Auto: ')+(p?p.name:'No proxy assigned')}
+      function fillRoutes(id,value){var el=document.getElementById(id);el.innerHTML='<option value="auto">Автоматическая привязка</option><option value="direct">Напрямую (без прокси)</option>'+currentProxies.map(function(p){return '<option value="'+esc(p.id)+'">'+esc(p.name)+(p.enabled?'':' (откл.)')+'</option>'}).join('');el.value=value||'auto'}
+      function routeLabel(k){if(k.proxy_mode==='direct')return 'Direct (напрямую)';var p=currentProxies.find(function(p){return p.id===k.proxy_id});return (k.proxy_mode==='fixed'?'Закреплён: ':'Авто: ')+(p?p.name:'Без прокси')}
       document.getElementById('keySearch').oninput=function(){keyPage=0;renderKeys(currentKeys)};document.getElementById('keyPrev').onclick=function(){keyPage--;renderKeys(currentKeys)};document.getElementById('keyNext').onclick=function(){keyPage++;renderKeys(currentKeys)};
+
       var proxyDialog=document.getElementById('proxyDialog');
-      function openProxy(id){if(adminRole!=='admin')return;document.getElementById('proxyForm').reset();var p=currentProxies.find(function(p){return p.id===id});document.getElementById('proxyEditId').value=id||'';document.getElementById('proxyName').value=p?p.name:'';document.getElementById('proxyURL').value=p?p.url:'';document.getElementById('proxyEnabled').checked=p?p.enabled:true;document.getElementById('proxyDialogTitle').textContent=p?'Edit network proxy':'Add network proxy';proxyDialog.showModal()}
+      function openProxy(id){if(adminRole!=='admin')return;document.getElementById('proxyForm').reset();var p=currentProxies.find(function(p){return p.id===id});document.getElementById('proxyEditId').value=id||'';document.getElementById('proxyName').value=p?p.name:'';document.getElementById('proxyURL').value=p?p.url:'';document.getElementById('proxyEnabled').checked=p?p.enabled:true;document.getElementById('proxyDialogTitle').textContent=p?'Редактировать прокси':'Добавить сетевой прокси';proxyDialog.showModal()}
       document.getElementById('addProxyBtn').onclick=function(){openProxy('')};document.querySelectorAll('[data-proxy-close]').forEach(function(el){el.onclick=function(){proxyDialog.close()}});
-      document.getElementById('proxyForm').onsubmit=async function(e){e.preventDefault();var button=this.querySelector('[type="submit"]');button.disabled=true;try{var id=document.getElementById('proxyEditId').value;var input={name:document.getElementById('proxyName').value,url:document.getElementById('proxyURL').value,enabled:document.getElementById('proxyEnabled').checked};if(document.getElementById('proxyClearAuth').checked){input.username='';input.password=''}else{var username=document.getElementById('proxyUsername').value,password=document.getElementById('proxyPassword').value;if(username)input.username=username;if(password)input.password=password}await api('/api/admin/network-proxies'+(id?'/'+id:''),{method:id?'PATCH':'POST',body:JSON.stringify(input)});this.reset();proxyDialog.close();showToast('Proxy saved; automatic bindings balanced');await load()}catch(e){showToast(e.message,true)}finally{button.disabled=false}};
-      function renderProxies(proxies){currentProxies=proxies;document.getElementById('proxyCount').textContent=proxies.length;var content=document.getElementById('proxyContent');if(!proxies.length){content.innerHTML='<div class="empty"><h3>No network proxies</h3><p>Add an endpoint to activate automatic proxy assignments. Explicit direct keys stay direct.</p></div>';return}content.innerHTML='<div class="table-wrap"><table><thead><tr><th>Name / endpoint</th><th>Authentication</th><th>Bindings</th><th>Status / last test</th><th>Actions</th></tr></thead><tbody>'+proxies.map(function(p){return '<tr><td><div class="key-name">'+esc(p.name)+'</div><span class="muted">'+esc(p.url)+'</span></td><td>'+ (p.has_auth?'Encrypted':'None')+'</td><td>'+p.assigned_keys+' keys</td><td><span class="badge '+(p.enabled?'on':'off')+'">'+(p.enabled?'Enabled':'Disabled')+'</span><div class="help">'+esc(p.last_error||(p.last_checked&&!p.last_checked.startsWith('0001')?'Last probe OK':'Not tested'))+'</div></td><td><div class="actions"><button class="btn" data-proxy-edit="'+esc(p.id)+'">Edit</button><button class="btn" data-proxy-test="'+esc(p.id)+'">Test</button><button class="btn danger" data-proxy-delete="'+esc(p.id)+'">Delete</button></div></td></tr>'}).join('')+'</tbody></table></div>';content.querySelectorAll('button').forEach(function(el){el.disabled=adminRole!=='admin'});content.querySelectorAll('[data-proxy-edit]').forEach(function(el){el.onclick=function(){openProxy(el.dataset.proxyEdit)}});content.querySelectorAll('[data-proxy-test]').forEach(function(el){el.onclick=async function(){var target=prompt('Connectivity target (no API key is sent)',defaultUpstream);if(target===null)return;el.disabled=true;try{var r=await api('/api/admin/network-proxies/'+el.dataset.proxyTest+'/test',{method:'POST',body:JSON.stringify({target_url:target})});showToast(r.message,!r.ok);await load()}catch(e){showToast(e.message,true)}finally{el.disabled=false}}});content.querySelectorAll('[data-proxy-delete]').forEach(function(el){el.onclick=async function(){if(!confirm('Delete proxy and rebalance automatic keys? Pinned keys must be reassigned first.'))return;try{await api('/api/admin/network-proxies/'+el.dataset.proxyDelete,{method:'DELETE'});showToast('Proxy deleted; bindings balanced');await load()}catch(e){showToast(e.message,true)}}})}
+      document.getElementById('proxyForm').onsubmit=async function(e){e.preventDefault();var button=this.querySelector('[type="submit"]');button.disabled=true;try{var id=document.getElementById('proxyEditId').value;var input={name:document.getElementById('proxyName').value,url:document.getElementById('proxyURL').value,enabled:document.getElementById('proxyEnabled').checked};if(document.getElementById('proxyClearAuth').checked){input.username='';input.password=''}else{var username=document.getElementById('proxyUsername').value,password=document.getElementById('proxyPassword').value;if(username)input.username=username;if(password)input.password=password}await api('/api/admin/network-proxies'+(id?'/'+id:''),{method:id?'PATCH':'POST',body:JSON.stringify(input)});this.reset();proxyDialog.close();showToast('Прокси сохранён; пул сбалансирован');await load()}catch(e){showToast(e.message,true)}finally{button.disabled=false}};
+      function renderProxies(proxies){currentProxies=proxies;document.getElementById('proxyCount').textContent=proxies.length;var content=document.getElementById('proxyContent');if(!proxies.length){content.innerHTML='<div class="empty"><div class="empty-icon">'+icon('M6 6h.01M18 6h.01M12 18h.01')+'</div><h3>Нет сетевых прокси</h3><p>Добавьте HTTP/SOCKS5 маршрут для изоляции исходящих соединений и WAF-сессий.</p></div>';return}content.innerHTML='<div class="table-wrap" tabindex="0" role="region" aria-label="Сетевые прокси"><table><thead><tr><th>Маршрут и адрес</th><th>Авторизация</th><th>Привязки</th><th>Статус и проверка</th><th style="text-align:right">Действия</th></tr></thead><tbody>'+proxies.map(function(p){return '<tr><td><div class="key-name">'+esc(p.name)+'</div><span class="mask">'+esc(p.url)+'</span></td><td>'+(p.has_auth?'Зашифрована':'Нет')+'</td><td>'+p.assigned_keys+' ключей</td><td><span class="badge '+(p.enabled?'on':'off')+'">'+(p.enabled?'Активен':'Отключён')+'</span><div class="help">'+esc(p.last_error||(p.last_checked&&!p.last_checked.startsWith('0001')?'Проверка успешна':'Не проверялся'))+'</div></td><td><div class="actions"><button class="btn sm" type="button" data-proxy-edit="'+esc(p.id)+'">Изменить</button><button class="btn sm" type="button" data-proxy-test="'+esc(p.id)+'">Тест</button><button class="btn sm danger" type="button" data-proxy-delete="'+esc(p.id)+'">Удалить</button></div></td></tr>'}).join('')+'</tbody></table></div>';content.querySelectorAll('button').forEach(function(el){el.disabled=adminRole!=='admin'});content.querySelectorAll('[data-proxy-edit]').forEach(function(el){el.onclick=function(){openProxy(el.dataset.proxyEdit)}});content.querySelectorAll('[data-proxy-test]').forEach(function(el){el.onclick=async function(){var target=prompt('Целевой URL для проверки связи (API-ключ не отправляется)',defaultUpstream);if(target===null)return;el.disabled=true;try{var r=await api('/api/admin/network-proxies/'+el.dataset.proxyTest+'/test',{method:'POST',body:JSON.stringify({target_url:target})});showToast(r.message,!r.ok);await load()}catch(e){showToast(e.message,true)}finally{el.disabled=false}}});content.querySelectorAll('[data-proxy-delete]').forEach(function(el){el.onclick=async function(){if(!confirm('Удалить прокси и перераспределить автоматические ключи?'))return;try{await api('/api/admin/network-proxies/'+el.dataset.proxyDelete,{method:'DELETE'});showToast('Прокси удалён; привязки перераспределены');await load()}catch(e){showToast(e.message,true)}}})}
+
       var editKeyDialog=document.getElementById('editKeyDialog');
       function openEditKey(id){
         if(adminRole!=='admin')return;
@@ -169,6 +2109,7 @@
           document.getElementById('editKeyValue').value='';editKeyDialog.close();showToast('API-ключ обновлён');await load();
         }catch(e){showToast(e.message,true)}finally{button.disabled=false}
       };
+
       function eventCategory(item){var msg=String(item&&item.message||'');return (item&&item.category)||(msg==='request_completed'?'requests':msg.includes('tool')?'tools':msg.startsWith('admin_')?'admin':'system')}
       function eventSummary(item){
         if(item.summary)return item.summary;
@@ -208,8 +2149,8 @@
         });
         el.innerHTML=filtered.length?filtered.slice().reverse().map(function(item){
           var severity=item.level==='error'?'Ошибка':item.level==='warn'?'Внимание':'Info';
-          return '<details class="log-entry log-level-'+(item.level==='error'?'error':item.level==='warn'?'warn':'info')+'" data-seq="'+esc(item.seq)+'"'+(open.has(String(item.seq))?' open':'')+'><summary><span class="log-time">'+esc(item.time?new Date(item.time).toLocaleTimeString():'')+'</span><span class="log-severity">'+severity+'</span><span class="log-content"><span class="log-summary">'+esc(eventSummary(item))+'</span><div class="log-meta">'+esc(eventMeta(item))+'</div></span></summary><div class="log-details">'+(item.request_id?'<button class="btn" data-log-request="'+esc(item.request_id)+'">Все события этого запроса</button>':'')+'<dl>'+eventDetails(item)+'</dl></div></details>';
-        }).join(''):'<div class="empty"><h3>Нет событий по выбранным фильтрам</h3><p>Измените фильтр или включите фоновые события.</p></div>';
+          return '<details class="log-entry log-level-'+(item.level==='error'?'error':item.level==='warn'?'warn':'info')+'" data-seq="'+esc(item.seq)+'"'+(open.has(String(item.seq))?' open':'')+'><summary><span class="log-time">'+esc(item.time?new Date(item.time).toLocaleTimeString('ru-RU'):'')+'</span><span class="log-severity">'+severity+'</span><span class="log-content"><span class="log-summary">'+esc(eventSummary(item))+'</span><div class="log-meta">'+esc(eventMeta(item))+'</div></span></summary><div class="log-details">'+(item.request_id?'<button class="btn sm" type="button" data-log-request="'+esc(item.request_id)+'">Все события этого запроса</button>':'')+'<dl>'+eventDetails(item)+'</dl></div></details>';
+        }).join(''):'<div class="empty"><h3>Нет событий по выбранным фильтрам</h3><p>Измените параметры фильтрации или включите показ фоновых событий.</p></div>';
         document.getElementById('logState').textContent=(logPaused?'Пауза':'Обновление каждые 5 с')+' · '+filtered.length+' из '+logItems.length+' событий'+(logRequestFilter?' · Request '+logRequestFilter:'')+(logNotice?' · '+logNotice:'');
         document.getElementById('logClearRequest').hidden=!logRequestFilter;
         el.querySelectorAll('[data-log-request]').forEach(function(btn){btn.onclick=function(){logRequestFilter=btn.dataset.logRequest;document.getElementById('logBackground').checked=true;document.getElementById('logSearch').value='';document.getElementById('logLevel').value='';document.getElementById('logCategory').value='';drawLogs()}});
@@ -241,6 +2182,7 @@
       document.getElementById('logBackground').onchange=drawLogs;
       document.getElementById('logClearRequest').onclick=function(){logRequestFilter='';drawLogs()};
       document.getElementById('logPause').onclick=function(){logPaused=!logPaused;this.textContent=logPaused?'Продолжить':'Пауза';drawLogs();if(!logPaused)loadLogs(false)};
+
       function setAuthView(state){
         authState=state;
         login.classList.toggle('hidden',state!=='login');
@@ -249,7 +2191,8 @@
         if(state==='checking'){document.getElementById('sessionLoadingMessage').textContent='Проверяем сессию…';document.getElementById('sessionRetry').hidden=true}
       }
       document.getElementById('sessionRetry').onclick=function(){session='cookie';setAuthView('checking');load()};
-      document.querySelectorAll('[data-password-toggle]').forEach(function(button){button.onclick=function(){var input=document.getElementById(button.dataset.passwordToggle);var show=input.type==='password';input.type=show?'text':'password';button.textContent=show?'Скрыть':'Показать';button.setAttribute('aria-label',show?'Скрыть пароль':'Показать пароль')}});
+      document.querySelectorAll('[data-password-toggle]').forEach(function(button){button.onclick=function(){var input=document.getElementById(button.dataset.passwordToggle);var show=input.type==='password';input.type=show?'text':'password';button.textContent=show?'Скрыть':'Показать';button.setAttribute('aria-pressed',String(show));button.setAttribute('aria-label',show?'Скрыть пароль':'Показать пароль')}});
+
       var adminPasswordDialog=document.getElementById('adminPasswordDialog');
       document.getElementById('adminAccessBtn').onclick=function(){document.getElementById('adminPasswordForm').reset();document.getElementById('passwordSetupError').textContent='';document.getElementById('adminAccountLabel').textContent='Аккаунт: '+(currentAdmin.name||'owner');adminPasswordDialog.showModal()};
       document.querySelectorAll('[data-admin-password-close]').forEach(function(button){button.onclick=function(){adminPasswordDialog.close()}});

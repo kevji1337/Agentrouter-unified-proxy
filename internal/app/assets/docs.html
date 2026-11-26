@@ -1,1 +1,166 @@
-<!doctype html><html><head><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate icon" href="/favicon.ico"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentRouter API</title><style>body{margin:0;background:#020617}</style></head><body><div id="redoc"></div><script src="https://unpkg.com/redoc@2/bundles/redoc.standalone.js"></script><script>Redoc.init('/openapi.json',{theme:{colors:{primary:{main:'#22c55e'}},typography:{fontFamily:'Inter,system-ui,sans-serif'},sidebar:{backgroundColor:'#0f172a',textColor:'#e2e8f0'},rightPanel:{backgroundColor:'#020617'}}},document.getElementById('redoc'))</script></body></html>
+<!doctype html>
+<html lang="ru">
+<head>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="alternate icon" href="/favicon.ico">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>AgentRouter · Документация API</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #050811;
+      --panel: #0b1220;
+      --line: rgba(148, 163, 184, 0.16);
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --accent: #10b981;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    .docs-topbar {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 24px;
+      background: rgba(8, 13, 25, 0.88);
+      backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--line);
+    }
+    .docs-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: var(--text);
+    }
+    .docs-logo {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      color: #34d399;
+      background: linear-gradient(145deg, rgba(16, 185, 129, 0.2), rgba(16, 185, 129, 0.04));
+      border: 1px solid rgba(52, 211, 153, 0.32);
+      box-shadow: 0 0 24px rgba(16, 185, 129, 0.14);
+    }
+    .docs-logo svg {
+      width: 18px;
+      height: 18px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.9;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .docs-title {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    .docs-sub {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .docs-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .docs-pill {
+      font-size: 11px;
+      font-weight: 600;
+      color: #6ee7b7;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      border-radius: 999px;
+      padding: 4px 10px;
+    }
+    .docs-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 13px;
+      border-radius: 9px;
+      font-size: 12px;
+      font-weight: 600;
+      text-decoration: none;
+      color: var(--text);
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid var(--line);
+      transition: border-color 0.16s, background 0.16s;
+    }
+    .docs-btn:hover {
+      border-color: rgba(148, 163, 184, 0.36);
+      background: #131e33;
+    }
+    .docs-btn.primary {
+      background: linear-gradient(180deg, #22c55e, #16a34a);
+      border-color: #22c55e;
+      color: #03120a;
+    }
+    .docs-btn.primary:hover {
+      filter: brightness(1.06);
+    }
+    .redoc-wrap {
+      background: #f8fafc;
+    }
+    @media (max-width: 640px) {
+      .docs-pill, .docs-sub { display: none; }
+      .docs-topbar { padding: 10px 14px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="docs-topbar">
+    <a class="docs-brand" href="/admin">
+      <span class="docs-logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 3 4.5 7.2v9.6L12 21l7.5-4.2V7.2L12 3Z"/><path d="m4.8 7.4 7.2 4 7.2-4M12 11.4V21"/></svg>
+      </span>
+      <span>
+        <div class="docs-title">AgentRouter Unified Proxy</div>
+        <div class="docs-sub">OpenAPI 3.1 · OpenAI · Responses · Anthropic · GenAI</div>
+      </span>
+    </a>
+    <div class="docs-actions">
+      <span class="docs-pill">v3 Gateway Spec</span>
+      <a class="docs-btn" href="/openapi.json" target="_blank" rel="noopener">openapi.json</a>
+      <a class="docs-btn primary" href="/admin">Панель управления</a>
+    </div>
+  </header>
+  <div id="redoc" class="redoc-wrap"></div>
+  <script src="https://unpkg.com/redoc@2/bundles/redoc.standalone.js"></script>
+  <script>
+    Redoc.init('/openapi.json', {
+      hideDownloadButton: false,
+      theme: {
+        colors: {
+          primary: { main: '#10b981' },
+          text: { primary: '#0f172a', secondary: '#475569' },
+          http: { get: '#0284c7', post: '#16a34a', put: '#d97706', patch: '#7c3aed', delete: '#dc2626' }
+        },
+        typography: {
+          fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, sans-serif',
+          headings: { fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif', fontWeight: '700' },
+          code: { fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace', fontSize: '12.5px' }
+        },
+        sidebar: { backgroundColor: '#090f1d', textColor: '#e2e8f0', activeTextColor: '#34d399' },
+        rightPanel: { backgroundColor: '#050811', textColor: '#e2e8f0' }
+      }
+    }, document.getElementById('redoc'));
+  </script>
+</body>
+</html>
