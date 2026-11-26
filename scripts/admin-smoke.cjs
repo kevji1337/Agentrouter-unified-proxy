@@ -71,12 +71,22 @@ async function smoke() {
   document.querySelector('[data-page="providers"]').click(); await pause();
   assert(document.querySelectorAll('#providerContent article').length === 2, 'provider cards');
   assert(document.querySelectorAll('.model-chip').length === 4, 'model chips');
+  assert(document.querySelector('.model-chip code').textContent === 'provider-a/model-a', 'prefixed model chip');
   document.querySelector('[data-provider-edit="provider_a"]').click();
   assert(document.getElementById('providerDialog').open, 'provider editor');
   document.getElementById('providerModels').value = 'model-a\nnew-model';
   document.getElementById('providerForm').dispatchEvent(new Event('submit', {cancelable:true})); await pause();
   const update = requests.find(([p,o]) => p === '/api/admin/providers/provider_a' && o.method === 'PATCH');
   assert(JSON.parse(update[1].body).models.includes('new-model'), 'model update payload');
+
+  document.querySelector('[data-page="clients"]').click(); await pause();
+  document.getElementById('createAccountBtn').click();
+  assert(document.getElementById('accountDialog').open, 'account dialog opens');
+  document.getElementById('accountUserName').value = 'friend';
+  document.getElementById('accountUserPassword').value = 'friend-strong-password-123';
+  document.getElementById('accountForm').dispatchEvent(new Event('submit', {cancelable:true})); await pause();
+  const createdAcc = requests.find(([p,o]) => p === '/api/admin/accounts' && o.method === 'POST');
+  assert(createdAcc && JSON.parse(createdAcc[1].body).role === 'viewer', 'friend viewer account created');
 
   document.querySelector('[data-page="credentials"]').click(); await pause();
   assert(document.querySelectorAll('#keyContent tbody tr').length === 12, 'pagination');

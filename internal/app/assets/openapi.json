@@ -249,6 +249,11 @@
             "type": "string",
             "maxLength": 80
           },
+          "model_prefix": {
+            "type": "string",
+            "maxLength": 40,
+            "description": "Optional lowercase prefix (a-z0-9._-). When omitted or empty, derived automatically from provider name so models are exposed as <prefix>/<model>."
+          },
           "base_url": {
             "type": "string"
           },
@@ -296,6 +301,15 @@
             "properties": {
               "id": {
                 "type": "string"
+              },
+              "effective_prefix": {
+                "type": "string"
+              },
+              "prefixed_models": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               },
               "keys": {
                 "type": "integer"
@@ -1386,6 +1400,145 @@
         "responses": {
           "200": {
             "description": "Cache cleared"
+          },
+          "403": {
+            "description": "Admin role required"
+          }
+        }
+      }
+    },
+    "/api/admin/accounts": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "get": {
+        "security": [
+          {
+            "adminSession": []
+          },
+          {
+            "adminCookie": []
+          }
+        ],
+        "summary": "List control-plane accounts (admin role)",
+        "responses": {
+          "200": {
+            "description": "Environment and UI-managed accounts without secrets"
+          },
+          "403": {
+            "description": "Admin role required"
+          }
+        }
+      },
+      "post": {
+        "security": [
+          {
+            "adminSession": []
+          },
+          {
+            "adminCookie": []
+          }
+        ],
+        "summary": "Create UI-managed admin or viewer account (admin role)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "password"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 64
+                  },
+                  "password": {
+                    "type": "string",
+                    "writeOnly": true,
+                    "minLength": 12,
+                    "maxLength": 1024
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "viewer",
+                      "admin"
+                    ],
+                    "default": "viewer"
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created account view"
+          },
+          "403": {
+            "description": "Admin role required"
+          }
+        }
+      }
+    },
+    "/api/admin/accounts/{name}": {
+      "servers": [
+        {
+          "url": "/"
+        }
+      ],
+      "parameters": [
+        {
+          "in": "path",
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "patch": {
+        "security": [
+          {
+            "adminSession": []
+          },
+          {
+            "adminCookie": []
+          }
+        ],
+        "summary": "Update role, enabled status, or password of UI-managed account (admin role)",
+        "responses": {
+          "200": {
+            "description": "Updated account view"
+          },
+          "403": {
+            "description": "Admin role required"
+          }
+        }
+      },
+      "delete": {
+        "security": [
+          {
+            "adminSession": []
+          },
+          {
+            "adminCookie": []
+          }
+        ],
+        "summary": "Delete UI-managed account and revoke its sessions (admin role)",
+        "responses": {
+          "204": {
+            "description": "Account deleted"
           },
           "403": {
             "description": "Admin role required"

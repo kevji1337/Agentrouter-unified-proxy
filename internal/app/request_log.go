@@ -245,6 +245,8 @@ func failureExplanation(code string) string {
 		return "Целевой адрес заблокирован защитой от SSRF / DNS Rebinding"
 	case "proxy_auth_required":
 		return "Клиентский ключ доступа к gateway отсутствует или невалиден"
+	case "client_daily_limit_exceeded":
+		return "Исчерпан дневной лимит запросов для этого клиентского ключа"
 	case "network_proxy_auth":
 		return "Сетевой прокси отклонил логин/пароль; API-ключ провайдера не признан невалидным"
 	case "upstream_idle_timeout":
@@ -342,7 +344,9 @@ func logSummary(event string, fields map[string]any) string {
 		"admin_network_proxy_updated": "Изменён сетевой прокси", "admin_network_proxy_deleted": "Удалён сетевой прокси",
 		"admin_backup_imported": "Импортирована резервная копия", "admin_client_key_created": "Создан клиентский ключ доступа",
 		"admin_client_key_revealed": "Администратор раскрыл клиентский ключ", "admin_client_key_updated": "Изменён клиентский ключ доступа",
-		"admin_client_key_deleted": "Удалён клиентский ключ доступа", "proxy_listening": "Gateway запущен",
+		"admin_client_key_deleted": "Удалён клиентский ключ доступа",
+		"admin_account_created":    "Создан аккаунт панели управления", "admin_account_updated": "Изменён аккаунт панели управления",
+		"admin_account_deleted": "Удалён аккаунт панели управления", "proxy_listening": "Gateway запущен",
 		"postgres_unavailable": "PostgreSQL недоступен", "redis_unavailable": "Redis недоступен",
 	}
 	if label := labels[event]; label != "" {

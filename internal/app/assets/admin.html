@@ -82,10 +82,12 @@
     .switch:focus-visible,
     .dropdown-trigger:focus-visible,
     .check-input:focus-visible,
+    .radio-input:focus-visible,
     .nav button:focus-visible,
     .password-toggle:focus-visible,
     .table-wrap:focus-visible,
-    .endpoint-copy:focus-visible {
+    .endpoint-copy:focus-visible,
+    .chip-copy-btn:focus-visible {
       outline: 2px solid var(--blue);
       outline-offset: 2px;
     }
@@ -504,6 +506,8 @@
     }
     .endpoint-copy {
       flex-shrink: 0;
+      min-inline-size: 28px;
+      min-block-size: 30px;
       border: 1px solid var(--line);
       background: var(--panel2);
       color: var(--text-soft);
@@ -511,11 +515,54 @@
       padding: 6px 10px;
       font-size: 11.5px;
       font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
       transition: border-color 0.15s, background 0.15s, color 0.15s;
     }
     .endpoint-copy:hover {
       border-color: rgba(52, 211, 153, 0.4);
       color: #6ee7b7;
+    }
+    .copy-wrap {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .copy-icon-done, .copy-icon-fail { display: none; }
+    button[data-copied] .copy-icon-idle { display: none; }
+    button[data-copied] .copy-icon-done { display: inline; color: #34d399; }
+    button[data-failed] .copy-icon-idle { display: none; }
+    button[data-failed] .copy-icon-fail { display: inline; color: #f87171; }
+    button[data-copied] { border-color: rgba(52, 211, 153, 0.55); color: #6ee7b7; }
+    button[data-failed] { border-color: rgba(248, 113, 113, 0.55); color: #fca5a5; }
+    .copy-tip {
+      position: absolute;
+      inset-block-end: calc(100% + 6px);
+      inset-inline-end: 0;
+      padding: 3px 8px;
+      border-radius: 7px;
+      background: #0b1629;
+      border: 1px solid rgba(52, 211, 153, 0.36);
+      color: #dcfce7;
+      font-family: Inter, system-ui, sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      z-index: 20;
+      box-shadow: var(--shadow-sm);
+      transition: opacity 0.15s;
+    }
+    button[data-copied] + .copy-tip,
+    button[data-failed] + .copy-tip {
+      opacity: 1;
+    }
+    button[data-failed] + .copy-tip {
+      border-color: rgba(248, 113, 113, 0.45);
+      color: #fecaca;
     }
     .cache-strip {
       padding: 12px 18px 16px;
@@ -832,18 +879,141 @@
       flex-wrap: wrap;
       gap: 6px;
       margin-top: 14px;
-      max-height: 180px;
+      max-height: 196px;
       overflow: auto;
     }
     .model-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
       border: 1px solid rgba(148, 163, 184, 0.22);
       border-radius: 8px;
-      padding: 4px 9px;
+      padding: 3px 5px 3px 9px;
       background: rgba(18, 29, 51, 0.85);
       color: #e2e8f0;
       font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
-      font-size: 11px;
+      font-size: 11.5px;
       overflow-wrap: anywhere;
+    }
+    .model-chip code {
+      font-family: inherit;
+      font-size: inherit;
+      color: inherit;
+    }
+    .chip-prefix {
+      color: #34d399;
+      font-weight: 650;
+    }
+    .chip-copy-btn {
+      min-inline-size: 24px;
+      min-block-size: 24px;
+      padding: 0 4px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: rgba(15, 23, 42, 0.65);
+      color: #94a3b8;
+      display: inline-grid;
+      place-items: center;
+      transition: color 0.15s, border-color 0.15s, background 0.15s;
+    }
+    .chip-copy-btn:hover {
+      color: #6ee7b7;
+      border-color: rgba(52, 211, 153, 0.35);
+      background: rgba(16, 185, 129, 0.12);
+    }
+    .chip-copy-btn .icon-svg {
+      width: 13px;
+      height: 13px;
+    }
+    .prefix-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+      background: rgba(16, 185, 129, 0.1);
+      color: #6ee7b7;
+      border: 1px solid rgba(52, 211, 153, 0.24);
+    }
+    .access-guide {
+      border: 1px solid rgba(56, 189, 248, 0.24);
+      background: linear-gradient(160deg, rgba(14, 28, 48, 0.78), rgba(9, 17, 32, 0.88));
+      border-radius: 14px;
+      padding: 14px 18px;
+      margin-bottom: 16px;
+      font-size: 13px;
+      color: var(--text-soft);
+      line-height: 1.6;
+    }
+    .access-guide strong { color: #7dd3fc; }
+    .access-guide code {
+      padding: 1px 6px;
+      border-radius: 5px;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      font-size: 12px;
+      color: #6ee7b7;
+    }
+    .role-fieldset {
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      padding: 10px 13px 12px;
+      margin: 0 0 15px;
+      background: rgba(7, 13, 26, 0.65);
+    }
+    .role-fieldset legend {
+      padding: 0 6px;
+      font-size: 12.5px;
+      font-weight: 650;
+      color: var(--text-soft);
+    }
+    .role-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 7px 4px;
+    }
+    .radio-input {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 19px;
+      height: 19px;
+      margin: 2px 0 0;
+      flex-shrink: 0;
+      border-radius: 50%;
+      border: 1.5px solid #4b607f;
+      background: #0c1526;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+    }
+    .radio-input::after {
+      content: "";
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--green-bright);
+      transform: scale(0);
+      transition: transform 0.14s;
+    }
+    .radio-input:checked {
+      border-color: var(--green-bright);
+      box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.14);
+    }
+    .radio-input:checked::after { transform: scale(1); }
+    .role-option label {
+      cursor: pointer;
+      font-size: 13px;
+      line-height: 1.45;
+      color: var(--text);
+    }
+    .role-option label span {
+      display: block;
+      font-size: 11.5px;
+      color: var(--muted);
+      margin-top: 2px;
     }
 
     /* Live Events Journal */
@@ -1574,7 +1744,7 @@
       </button>
       <button type="button" data-page="clients">
         <svg class="icon-svg" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15h4M7 10h10"/></svg>
-        <span>Доступ IDE</span>
+        <span>Доступ</span>
       </button>
       <button type="button" data-page="logs">
         <svg class="icon-svg" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
@@ -1660,21 +1830,45 @@
                 <div class="endpoint-tag">OpenAI SDK / Cursor / Cline</div>
                 <div id="epOpenAI" class="endpoint-url">/v1</div>
               </div>
-              <button type="button" class="endpoint-copy" data-copy-ep="epOpenAI">Копировать</button>
+              <span class="copy-wrap">
+                <button type="button" class="endpoint-copy" command="--copy" commandfor="epOpenAI" aria-label="Копировать OpenAI Base URL">
+                  <svg class="icon-svg copy-icon-idle" aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  <svg class="icon-svg copy-icon-done" aria-hidden="true" viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg>
+                  <svg class="icon-svg copy-icon-fail" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 8v5m0 3h.01"/></svg>
+                  <span>Копировать</span>
+                </button>
+                <span class="copy-tip" role="status"></span>
+              </span>
             </div>
             <div class="endpoint-item">
               <div class="endpoint-info">
                 <div class="endpoint-tag">Claude Code / Anthropic Base URL</div>
                 <div id="epAnthropic" class="endpoint-url">/</div>
               </div>
-              <button type="button" class="endpoint-copy" data-copy-ep="epAnthropic">Копировать</button>
+              <span class="copy-wrap">
+                <button type="button" class="endpoint-copy" command="--copy" commandfor="epAnthropic" aria-label="Копировать Anthropic Base URL">
+                  <svg class="icon-svg copy-icon-idle" aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  <svg class="icon-svg copy-icon-done" aria-hidden="true" viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg>
+                  <svg class="icon-svg copy-icon-fail" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 8v5m0 3h.01"/></svg>
+                  <span>Копировать</span>
+                </button>
+                <span class="copy-tip" role="status"></span>
+              </span>
             </div>
             <div class="endpoint-item">
               <div class="endpoint-info">
                 <div class="endpoint-tag">Codex / OpenAI Responses</div>
                 <div id="epResponses" class="endpoint-url">/v1/responses</div>
               </div>
-              <button type="button" class="endpoint-copy" data-copy-ep="epResponses">Копировать</button>
+              <span class="copy-wrap">
+                <button type="button" class="endpoint-copy" command="--copy" commandfor="epResponses" aria-label="Копировать Responses URL">
+                  <svg class="icon-svg copy-icon-idle" aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  <svg class="icon-svg copy-icon-done" aria-hidden="true" viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg>
+                  <svg class="icon-svg copy-icon-fail" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 8v5m0 3h.01"/></svg>
+                  <span>Копировать</span>
+                </button>
+                <span class="copy-tip" role="status"></span>
+              </span>
             </div>
           </div>
           <div class="cache-strip">
@@ -1689,7 +1883,7 @@
       <div class="page-head">
         <div>
           <h2>Провайдеры и модели</h2>
-          <p>Задайте базовый URL, протокол и список моделей. Привязанные ключи наследуют настройки провайдера.</p>
+          <p>Каждому провайдеру назначается внутренний префикс: одинаковые модели разных API вызываются однозначно как <code>префикс/модель</code>, а при отправке апстриму префикс автоматически снимается.</p>
         </div>
         <button id="addProviderBtn" class="btn primary" type="button">Добавить провайдер</button>
       </div>
@@ -1740,16 +1934,28 @@
     <section id="page-clients" hidden>
       <div class="page-head">
         <div>
-          <h2>Клиентские ключи для IDE и агентов</h2>
-          <p>Токены формата <code>arp_...</code> работают как стандартный <code>Authorization: Bearer</code> (OpenAI) и <code>x-api-key</code> (Claude Code) и никогда не пересылаются апстриму.</p>
+          <h2>Доступ к прокси и аккаунты панели</h2>
+          <p>Выдавайте персональные API-ключи <code>arp_...</code> для IDE (себе или другу) с учётом токенов и лимитов, а также создавайте аккаунты для входа в <code>/admin</code>.</p>
         </div>
       </div>
-      <section class="card" style="margin-bottom:16px">
+      <div class="access-guide">
+        <strong>Как выдать доступ другу:</strong>
+        1) Создайте отдельный клиентский ключ <code>arp_...</code> (например, «Кент») — он работает и как <code>Bearer</code> в Cursor/OpenAI, и как <code>x-api-key</code> в Claude Code, при этом ваши ключи провайдеров скрыты, а в таблице и журнале виден расход токенов.
+        2) При желании ниже создайте аккаунт с ролью <code>viewer</code> (Только просмотр), чтобы друг мог сам заходить в <code>/admin</code> и копировать актуальные модели <code>префикс/модель</code> без права менять настройки.
+      </div>
+      <section class="card" style="margin-bottom:18px">
         <div class="card-head">
-          <div class="card-title"><h3>Клиентские API-ключи</h3><span id="clientKeyCount" class="count">0</span></div>
+          <div class="card-title"><h3>Клиентские API-ключи (IDE / агенты)</h3><span id="clientKeyCount" class="count">0</span></div>
           <button id="createClientKeyBtn" class="btn primary" type="button">Создать ключ</button>
         </div>
         <div id="clientKeyContent"><div class="empty"><p>Загрузка клиентских ключей…</p></div></div>
+      </section>
+      <section id="accountsSection" class="card">
+        <div class="card-head">
+          <div class="card-title"><h3>Аккаунты веб-панели (/admin)</h3><span id="accountCount" class="count">0</span></div>
+          <button id="createAccountBtn" class="btn primary" type="button">Добавить аккаунт</button>
+        </div>
+        <div id="accountContent"><div class="empty"><p>Загрузка аккаунтов…</p></div></div>
       </section>
     </section>
 
@@ -1840,15 +2046,54 @@
   </dialog>
 
   <dialog id="clientKeyDialog" closedby="any" aria-labelledby="clientKeyDialogTitle">
-    <form id="clientKeyForm" method="post">
+    <form id="clientKeyForm" method="post" action="/api/admin/client-keys" aria-labelledby="clientKeyDialogTitle">
       <div class="modal-head">
         <h3 id="clientKeyDialogTitle">Новый клиентский ключ</h3>
         <button type="button" class="btn icon" data-client-close aria-label="Закрыть"><svg class="icon-svg" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
       </div>
       <div class="modal-body">
-        <div class="field"><label for="clientKeyName">Название устройства или агента</label><input id="clientKeyName" class="input" maxlength="80" placeholder="Claude Code / Cursor" required></div>
-        <div class="help">Сгенерированный ключ подходит и для <code>Bearer</code> (OpenAI), и для <code>x-api-key</code> (Anthropic).</div>
-        <div class="modal-actions"><button type="button" class="btn" data-client-close>Отмена</button><button type="submit" class="btn primary">Сгенерировать</button></div>
+        <input id="clientKeyEditId" type="hidden">
+        <div class="field"><label for="clientKeyName">Имя пользователя или устройства</label><input id="clientKeyName" name="name" class="input" maxlength="80" placeholder="Кент — Cursor / Claude Code" required></div>
+        <div class="field"><label for="clientKeyDailyLimit">Дневной лимит запросов <span class="muted" style="font-weight:500">0 = без лимита</span></label><input id="clientKeyDailyLimit" name="daily_request_limit" class="input" type="number" min="0" max="10000000" value="0" aria-describedby="clientKeyLimitHelp"><div id="clientKeyLimitHelp" class="help">Ключ подходит и для <code>Bearer</code> (OpenAI), и для <code>x-api-key</code> (Anthropic). Все запросы и токены учитываются отдельно.</div></div>
+        <div class="modal-actions"><button type="button" class="btn" data-client-close>Отмена</button><button id="clientKeySubmitBtn" type="submit" class="btn primary">Сгенерировать</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="accountDialog" closedby="any" aria-labelledby="accountDialogTitle">
+    <form id="accountForm" method="post" action="/api/admin/accounts" aria-labelledby="accountDialogTitle">
+      <div class="modal-head">
+        <h3 id="accountDialogTitle">Добавить аккаунт панели</h3>
+        <button type="button" class="btn icon" data-account-close aria-label="Закрыть"><svg class="icon-svg" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <input id="accountEditMode" type="hidden">
+        <div class="field">
+          <label for="accountUserName">Логин для входа</label>
+          <input id="accountUserName" name="username" class="input" type="text" autocomplete="username" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" minlength="2" maxlength="64" pattern="[a-zA-Z0-9._@\-]+" aria-describedby="accountUserHelp" placeholder="kent" required>
+          <div id="accountUserHelp" class="help">От 2 до 64 символов: латиница, цифры, <code>.</code>, <code>_</code>, <code>-</code> или <code>@</code>.</div>
+        </div>
+        <fieldset class="role-fieldset">
+          <legend>Уровень доступа</legend>
+          <div class="role-option">
+            <input id="accountRoleViewer" class="radio-input" type="radio" name="role" value="viewer" checked>
+            <label for="accountRoleViewer">Только просмотр (viewer)<span>Рекомендуется для друга: видит доступные <code>префикс/модель</code>, статус и журнал, но не может менять настройки или раскрывать ключи.</span></label>
+          </div>
+          <div class="role-option">
+            <input id="accountRoleAdmin" class="radio-input" type="radio" name="role" value="admin">
+            <label for="accountRoleAdmin">Администратор (admin)<span>Полное управление провайдерами, API-ключами, сетевыми маршрутами и аккаунтами.</span></label>
+          </div>
+        </fieldset>
+        <div class="field">
+          <label for="accountUserPassword"><span id="accountPasswordLabelText">Пароль (от 12 символов)</span></label>
+          <div class="password-input">
+            <input id="accountUserPassword" name="new-password" class="input" type="password" autocomplete="new-password" minlength="12" maxlength="1024" enterkeyhint="done" aria-describedby="accountPasswordHelp" placeholder="Минимум 12 символов" required>
+            <button type="button" class="password-toggle" data-password-toggle="accountUserPassword" aria-pressed="false" aria-label="Показать пароль">Показать</button>
+          </div>
+          <div id="accountPasswordHelp" class="help">Хранится в виде PBKDF2-SHA256 (600 000 итераций); пользователь сможет сменить свой пароль после входа.</div>
+        </div>
+        <label class="check-row"><input id="accountUserEnabled" name="enabled" class="check-input" type="checkbox" checked><span>Аккаунт активен</span></label>
+        <div class="modal-actions"><button type="button" class="btn" data-account-close>Отмена</button><button id="accountSubmitBtn" type="submit" class="btn primary">Создать аккаунт</button></div>
       </div>
     </form>
   </dialog>
@@ -1860,8 +2105,19 @@
     </div>
     <div class="modal-body">
       <div class="field"><label for="revealedToken">Токен доступа</label><input id="revealedToken" class="input" readonly style="font-family:ui-monospace,monospace"></div>
-      <div class="help">Укажите этот токен как API Key в вашей IDE или CLI-агенте.</div>
-      <div class="modal-actions"><button type="button" class="btn" data-reveal-close>Закрыть</button><button id="copyClientTokenBtn" type="button" class="btn primary">Скопировать ключ</button></div>
+      <div class="help">Укажите этот токен как API Key в вашей IDE или отправьте другу вместе с Base URL шлюза.</div>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-reveal-close>Закрыть</button>
+        <span class="copy-wrap">
+          <button id="copyClientTokenBtn" type="button" class="btn primary" command="--copy" commandfor="revealedToken">
+            <svg class="icon-svg copy-icon-idle" aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <svg class="icon-svg copy-icon-done" aria-hidden="true" viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg>
+            <svg class="icon-svg copy-icon-fail" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 8v5m0 3h.01"/></svg>
+            <span>Скопировать ключ</span>
+          </button>
+          <span class="copy-tip" role="status"></span>
+        </span>
+      </div>
     </div>
   </dialog>
 
@@ -1888,21 +2144,24 @@
   </dialog>
 
   <dialog id="providerDialog" closedby="any" aria-labelledby="providerDialogTitle">
-    <form id="providerForm" method="post">
+    <form id="providerForm" method="post" action="/api/admin/providers" aria-labelledby="providerDialogTitle">
       <div class="modal-head">
         <h3 id="providerDialogTitle">Добавить провайдер</h3>
         <button type="button" class="btn icon" data-provider-close aria-label="Закрыть"><svg class="icon-svg" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
       </div>
       <div class="modal-body">
         <input id="providerEditId" type="hidden">
-        <div class="field"><label for="providerName">Название провайдера</label><input id="providerName" class="input" maxlength="80" required placeholder="AgentRouter / Anthropic / Gemini"></div>
-        <div class="field"><label for="providerBaseURL">API Base URL</label><input id="providerBaseURL" class="input" type="url" autocorrect="off" autocapitalize="none" spellcheck="false" required placeholder="https://agentrouter.org"></div>
         <div class="form-grid">
-          <div class="field"><label for="providerProtocol">API-протокол</label><select id="providerProtocol" class="input"><option value="responses">Responses API</option><option value="chat-completions">Chat Completions API</option><option value="anthropic">Anthropic Messages API</option><option value="genai">Google GenAI</option></select></div>
-          <div class="field"><label for="providerProfile">Профиль заголовков</label><select id="providerProfile" class="input"><option value="">Автоматически</option><option value="generic">Generic OpenAI</option><option value="claude-code">Claude Code</option><option value="codex">Codex</option></select></div>
+          <div class="field"><label for="providerName">Название провайдера</label><input id="providerName" name="name" class="input" maxlength="80" required placeholder="Vyceai / Novita / AgentRouter"></div>
+          <div class="field"><label for="providerPrefix">Префикс моделей <span class="muted" style="font-weight:500">авто</span></label><input id="providerPrefix" name="model_prefix" class="input" maxlength="40" autocorrect="off" autocapitalize="none" spellcheck="false" pattern="[a-zA-Z0-9._\-]+" aria-describedby="providerPrefixHelp" placeholder="vyceai"><div id="providerPrefixHelp" class="help">Вызов: <code id="providerPrefixPreview">provider/model</code></div></div>
         </div>
-        <div class="field"><label for="providerModels">Каталог моделей (ID)</label><textarea id="providerModels" class="input" rows="5" spellcheck="false" placeholder="claude-sonnet-4-5&#10;gpt-4.1&#10;gemini-2.5-pro"></textarea><div class="help">По одному точному ID на строку или через запятую (без <code>*</code>).</div></div>
-        <label class="check-row"><input id="providerEnabled" class="check-input" type="checkbox" checked><span>Провайдер активен</span></label>
+        <div class="field"><label for="providerBaseURL">API Base URL</label><input id="providerBaseURL" name="base_url" class="input" type="url" autocorrect="off" autocapitalize="none" spellcheck="false" required placeholder="https://agentrouter.org"></div>
+        <div class="form-grid">
+          <div class="field"><label for="providerProtocol">API-протокол</label><select id="providerProtocol" name="api_protocol" class="input"><option value="responses">Responses API</option><option value="chat-completions">Chat Completions API</option><option value="anthropic">Anthropic Messages API</option><option value="genai">Google GenAI</option></select></div>
+          <div class="field"><label for="providerProfile">Профиль заголовков</label><select id="providerProfile" name="spoof_profile" class="input"><option value="">Автоматически</option><option value="generic">Generic OpenAI</option><option value="claude-code">Claude Code</option><option value="codex">Codex</option></select></div>
+        </div>
+        <div class="field"><label for="providerModels">Каталог моделей провайдера (upstream ID)</label><textarea id="providerModels" name="models" class="input" rows="5" spellcheck="false" placeholder="glm-5.3-flash&#10;zai-org/glm-5.3-flash&#10;gpt-5.6-sol"></textarea><div class="help">Указывайте чистые ID апстрима (по одному на строку или через запятую). В панели и <code>/v1/models</code> они автоматически станут <code>префикс/модель</code>.</div></div>
+        <label class="check-row"><input id="providerEnabled" name="enabled" class="check-input" type="checkbox" checked><span>Провайдер активен</span></label>
         <div class="modal-actions"><button type="button" class="btn" data-provider-close>Отмена</button><button type="submit" class="btn primary">Сохранить провайдер</button></div>
       </div>
     </form>
@@ -1949,7 +2208,7 @@
     (function(){
       var session=sessionStorage.getItem('ar_admin_session')||'cookie',currentAdmin={},authState='checking';
       var login=document.getElementById('login'),loginForm=document.getElementById('loginForm'),loginError=document.getElementById('loginError');
-      var dialog=document.getElementById('addDialog'),policyDialog=document.getElementById('policyDialog'),clientKeyDialog=document.getElementById('clientKeyDialog'),revealDialog=document.getElementById('revealDialog'),routingDropdown=document.getElementById('routingDropdown'),toastTimer,currentKeys=[],lastLogSeq=0,adminRole='viewer',defaultUpstream='https://agentrouter.org',currentProxies=[],currentProviders=[],activePage='overview',keyPage=0,loadSeq=0,logItems=[],logInstance="",logPaused=false,logBusy=false,logRequestFilter="",logNotice="";
+      var dialog=document.getElementById('addDialog'),policyDialog=document.getElementById('policyDialog'),clientKeyDialog=document.getElementById('clientKeyDialog'),accountDialog=document.getElementById('accountDialog'),revealDialog=document.getElementById('revealDialog'),routingDropdown=document.getElementById('routingDropdown'),toastTimer,currentKeys=[],currentClientKeys=[],currentAccounts=[],lastLogSeq=0,adminRole='viewer',defaultUpstream='https://agentrouter.org',currentProxies=[],currentProviders=[],activePage='overview',keyPage=0,loadSeq=0,logItems=[],logInstance="",logPaused=false,logBusy=false,logRequestFilter="",logNotice="";
 
       var originBase=(location.protocol==='http:'||location.protocol==='https:')?location.origin:'http://127.0.0.1:8080';
       document.getElementById('epOpenAI').textContent=originBase+'/v1';
@@ -1959,12 +2218,76 @@
       function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
       function icon(path){return '<svg class="icon-svg" viewBox="0 0 24 24"><path d="'+path+'"/></svg>'}
       function protoBadge(proto){var p=proto||'responses';return '<span class="proto-pill proto-'+esc(p)+'">'+esc(p)+'</span>'}
+      function fmtTokens(n){n=Number(n||0);if(n>=1e6)return (n/1e6).toFixed(2)+'M';if(n>=1e3)return (n/1e3).toFixed(1)+'k';return String(n)}
+      function slugPrefix(name){
+        var map={'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'e','ж':'zh','з':'z','и':'i','й':'i','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r','с':'s','т':'t','у':'u','ф':'f','х':'kh','ц':'ts','ч':'ch','ш':'sh','щ':'shch','ъ':'','ы':'y','ь':'','э':'e','ю':'yu','я':'ya'};
+        var s=String(name||'').toLowerCase().split('').map(function(ch){return map[ch]!==undefined?map[ch]:ch}).join('');
+        s=s.replace(/[^a-z0-9._-]+/g,'-').replace(/-+/g,'-').replace(/^[-._]+|[-._]+$/g,'').slice(0,40).replace(/[-._]+$/,'');
+        return s||'provider';
+      }
+      function providerPrefix(p){return (p&&(p.effective_prefix||p.model_prefix))||slugPrefix(p&&p.name)}
+      function copyBtnMarkup(targetId,label){
+        return '<span class="copy-wrap"><button type="button" class="chip-copy-btn" command="--copy" commandfor="'+esc(targetId)+'" aria-label="'+esc(label)+'"><svg class="icon-svg copy-icon-idle" aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="icon-svg copy-icon-done" aria-hidden="true" viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><svg class="icon-svg copy-icon-fail" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 8v5m0 3h.01"/></svg></button><span class="copy-tip" role="status"></span></span>';
+      }
+      var copyTimers=new WeakMap(),lastCopyAnnouncement='';
+      function legacyCopy(text){
+        var prev=document.activeElement;
+        var field=Object.assign(document.createElement('textarea'),{value:text});
+        field.setAttribute('readonly','');
+        field.style.cssText='position:fixed;inset-block-start:0;opacity:0';
+        document.body.append(field);
+        field.select();
+        try{return document.execCommand('copy')}finally{field.remove();if(prev&&prev.focus)prev.focus({preventScroll:true})}
+      }
+      function reportCopy(button,ok){
+        var tip=button.nextElementSibling;
+        clearTimeout(copyTimers.get(button));
+        button.removeAttribute('data-copied');
+        button.removeAttribute('data-failed');
+        var message=ok?'Скопировано':'Ошибка копирования';
+        if(message===lastCopyAnnouncement)message+='\u00A0';
+        lastCopyAnnouncement=message;
+        if(tip)tip.textContent='';
+        void button.offsetWidth;
+        button.setAttribute(ok?'data-copied':'data-failed','');
+        requestAnimationFrame(function(){if(tip)tip.textContent=message});
+        copyTimers.set(button,setTimeout(function(){
+          button.removeAttribute('data-copied');
+          button.removeAttribute('data-failed');
+          if(tip)tip.textContent='';
+        },2000));
+      }
+      async function performCopy(button,target){
+        if(!target)return;
+        var text=target.matches('input, textarea')?target.value:(target.innerText||target.textContent||'').trim();
+        if(!text)return;
+        try{
+          await navigator.clipboard.writeText(text);
+          reportCopy(button,true);
+        }catch(e){
+          if(legacyCopy(text))reportCopy(button,true);
+          else reportCopy(button,false);
+        }
+      }
+      if('CommandEvent' in window){
+        document.addEventListener('command',function(event){
+          if(event.command&&event.command.indexOf('--copy')===0)performCopy(event.source,event.target);
+        },true);
+      }else{
+        document.addEventListener('click',function(event){
+          if(event.defaultPrevented)return;
+          var btn=event.target.closest('button[command^="--copy"]');
+          if(!btn)return;
+          var target=document.getElementById(btn.getAttribute('commandfor'));
+          if(target)performCopy(btn,target);
+        });
+      }
       function showToast(message,error){var el=document.getElementById('toast');el.textContent=message;el.className='toast show'+(error?' error':'');clearTimeout(toastTimer);toastTimer=setTimeout(function(){el.className='toast'},3200)}
       async function api(path,options){options=options||{};options.headers=Object.assign({'Content-Type':'application/json','X-Admin-CSRF':'1'},options.headers||{});if(session&&session!=='cookie')options.headers['X-Admin-Session']=session;var response=await fetch(path,options);if(response.status===204)return null;var data=await response.json().catch(function(){return {}});if(response.status===401&&!(data.error&&data.error.code==='admin_reauth_required')){lock();var authError=new Error('Войдите в панель');authError.auth=true;throw authError}if(!response.ok)throw new Error(data.error&&data.error.message||('HTTP '+response.status));return data}
-      function lock(){loadSeq++;document.querySelectorAll('dialog[open]').forEach(function(el){el.close()});document.getElementById('revealedToken').value='';document.getElementById('keyValue').value='';document.getElementById('proxyPassword').value='';document.getElementById('editKeyValue').value='';document.getElementById('adminPassword').value='';document.getElementById('adminPasswordForm').reset();logItems=[];lastLogSeq=0;logInstance='';logRequestFilter='';session='';sessionStorage.removeItem('ar_admin_session');setAuthView('login');document.getElementById('adminPassword').focus()}
+      function lock(){loadSeq++;document.querySelectorAll('dialog[open]').forEach(function(el){el.close()});document.getElementById('revealedToken').value='';document.getElementById('keyValue').value='';document.getElementById('proxyPassword').value='';document.getElementById('editKeyValue').value='';document.getElementById('adminPassword').value='';document.getElementById('accountUserPassword').value='';document.getElementById('adminPasswordForm').reset();logItems=[];lastLogSeq=0;logInstance='';logRequestFilter='';session='';sessionStorage.removeItem('ar_admin_session');setAuthView('login');document.getElementById('adminPassword').focus()}
       function dateText(value){if(!value)return 'Никогда';return new Intl.DateTimeFormat('ru-RU',{dateStyle:'medium',timeStyle:'short'}).format(new Date(value))}
 
-      async function load(){var seq=++loadSeq;try{var status=await api('/api/admin/status');if(seq!==loadSeq)return;renderStatus(status);setAuthView('authenticated');if(activePage==='overview'){var k=await api('/api/admin/keys');if(seq===loadSeq)renderUsage(k.data||[])}else if(activePage==='credentials'){var data=await Promise.all([api('/api/admin/keys'),api('/api/admin/network-proxies'),api('/api/admin/providers')]);if(seq!==loadSeq)return;currentProxies=data[1].data||[];currentProviders=data[2].data||[];renderKeys(data[0].data||[])}else if(activePage==='providers'){var providers=await api('/api/admin/providers');if(seq===loadSeq)renderProviders(providers.data||[])}else if(activePage==='proxies'){var p=await api('/api/admin/network-proxies');if(seq===loadSeq)renderProxies(p.data||[])}else if(activePage==='clients'){var c=await api('/api/admin/client-keys');if(seq===loadSeq)renderClientKeys(c.data||[])}else{await loadLogs(true)}if(seq!==loadSeq||!session)return;login.classList.add('hidden')}catch(error){if(!error.auth){if(authState==='checking'){document.getElementById('sessionLoadingMessage').textContent='Не удалось проверить сессию. Повторите попытку.';document.getElementById('sessionRetry').hidden=false}else{showToast(error.message,true)}}}}
+      async function load(){var seq=++loadSeq;try{var status=await api('/api/admin/status');if(seq!==loadSeq)return;renderStatus(status);setAuthView('authenticated');if(activePage==='overview'){var k=await api('/api/admin/keys');if(seq===loadSeq)renderUsage(k.data||[])}else if(activePage==='credentials'){var data=await Promise.all([api('/api/admin/keys'),api('/api/admin/network-proxies'),api('/api/admin/providers')]);if(seq!==loadSeq)return;currentProxies=data[1].data||[];currentProviders=data[2].data||[];renderKeys(data[0].data||[])}else if(activePage==='providers'){var providers=await api('/api/admin/providers');if(seq===loadSeq)renderProviders(providers.data||[])}else if(activePage==='proxies'){var p=await api('/api/admin/network-proxies');if(seq===loadSeq)renderProxies(p.data||[])}else if(activePage==='clients'){var cData=await Promise.all([api('/api/admin/client-keys'),adminRole==='admin'?api('/api/admin/accounts').catch(function(){return {data:[]}}):Promise.resolve({data:[]})]);if(seq!==loadSeq)return;renderClientKeys(cData[0].data||[]);renderAccounts(cData[1].data||[])}else{await loadLogs(true)}if(seq!==loadSeq||!session)return;login.classList.add('hidden')}catch(error){if(!error.auth){if(authState==='checking'){document.getElementById('sessionLoadingMessage').textContent='Не удалось проверить сессию. Повторите попытку.';document.getElementById('sessionRetry').hidden=false}else{showToast(error.message,true)}}}}
 
       function selectPage(page){if(!document.getElementById('page-'+page))page='overview';activePage=page;document.querySelectorAll('[data-page]').forEach(function(el){if(el.dataset.page===page)el.setAttribute('aria-current','page');else el.removeAttribute('aria-current')});document.querySelectorAll('main > section').forEach(function(el){el.hidden=el.id!=='page-'+page});if(session)load()}
       document.querySelectorAll('[data-page]').forEach(function(el){el.onclick=function(){location.hash=el.dataset.page;selectPage(el.dataset.page)}});window.addEventListener('hashchange',function(){if(activePage!==location.hash.slice(1))selectPage(location.hash.slice(1))});
@@ -1977,7 +2300,8 @@
         document.getElementById('adminName').value=currentAdmin.name||'owner';
         defaultUpstream=s.upstream||'https://agentrouter.org';
         adminRole=s.admin&&s.admin.role||'viewer';
-        document.querySelectorAll('#addBtn,#importBtn,#createClientKeyBtn,#addProxyBtn,#modeButton,#addProviderBtn,#probeAllBtn,#clearCacheBtn').forEach(function(el){el.disabled=adminRole!=='admin'});
+        document.getElementById('accountsSection').hidden=adminRole!=='admin';
+        document.querySelectorAll('#addBtn,#importBtn,#exportBtn,#createClientKeyBtn,#createAccountBtn,#addProxyBtn,#modeButton,#addProviderBtn,#probeAllBtn,#clearCacheBtn').forEach(function(el){el.disabled=adminRole!=='admin'});
         document.getElementById('gatewayDot').className='dot good';
         document.getElementById('gatewayValue').textContent='Онлайн';
         document.getElementById('wafDot').className='dot '+(s.waf_cookie?'good':(s.profile==='generic'?'good':'warn'));
@@ -1999,12 +2323,6 @@
         }
       }
 
-      document.querySelectorAll('[data-copy-ep]').forEach(function(btn){
-        btn.onclick=async function(){
-          var text=document.getElementById(btn.dataset.copyEp).textContent;
-          try{await navigator.clipboard.writeText(text);showToast('Скопировано: '+text)}catch(e){showToast('Не удалось скопировать',true)}
-        };
-      });
       document.getElementById('probeAllBtn').onclick=async function(){
         var btn=this;btn.disabled=true;
         try{var r=await api('/api/admin/keys/probe',{method:'POST'});showToast('Проверено: '+r.checked+' · Принято: '+r.accepted+' · Ошибок: '+r.failed,r.failed>0);await load()}catch(e){showToast(e.message,true)}finally{btn.disabled=adminRole!=='admin'}
@@ -2013,10 +2331,43 @@
         try{await api('/api/admin/cache',{method:'DELETE'});showToast('Кэш ответов очищен');await load()}catch(e){showToast(e.message,true)}
       };
 
-      function renderClientKeys(keys){document.getElementById('clientKeyCount').textContent=keys.length;var content=document.getElementById('clientKeyContent');if(!keys.length){content.innerHTML='<div class="empty"><div class="empty-icon">'+icon('M3 5h18v14H3zM7 15h4M7 10h10')+'</div><h3>Нет клиентских ключей</h3><p>Создайте токен доступа для Claude Code, Cursor или собственных скриптов.</p></div>';return}var rows=keys.map(function(k){return '<tr><td><div class="key-name">'+esc(k.name)+'</div><div class="key-id">'+esc(k.id)+'</div></td><td><span class="mask">'+esc(k.mask)+'</span></td><td><span class="badge '+(k.enabled?'on':'off')+'">'+(k.enabled?'Активен':'Отключён')+'</span></td><td>'+k.uses+'</td><td class="muted">'+esc(dateText(k.last_used))+'</td><td><div class="actions"><button class="switch '+(k.enabled?'on':'')+'" data-client-toggle="'+esc(k.id)+'" data-enabled="'+k.enabled+'" aria-label="Переключить клиентский ключ"><span></span></button><button class="btn icon" data-client-reveal="'+esc(k.id)+'" aria-label="Показать клиентский ключ" title="Показать ключ">'+icon('M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12m10-3a3 3 0 1 0 0 6 3 3 0 0 0 0-6')+'</button><button class="btn icon danger" data-client-delete="'+esc(k.id)+'" data-name="'+esc(k.name)+'" aria-label="Удалить клиентский ключ" title="Удалить">'+icon('M4 7h16M9 7V4h6v3m-9 0 1 14h10l1-14M10 11v6m4-6v6')+'</button></div></td></tr>'}).join('');content.innerHTML='<div class="table-wrap" tabindex="0" role="region" aria-label="Клиентские API-ключи"><table><thead><tr><th>Название</th><th>Маска ключа</th><th>Статус</th><th>Запросов</th><th>Последний вызов</th><th style="text-align:right">Действия</th></tr></thead><tbody>'+rows+'</tbody></table></div>';document.querySelectorAll('[data-client-toggle],[data-client-reveal],[data-client-delete]').forEach(function(el){el.disabled=adminRole!=='admin'});document.querySelectorAll('[data-client-toggle]').forEach(function(el){el.onclick=async function(){try{await api('/api/admin/client-keys/'+el.dataset.clientToggle,{method:'PATCH',body:JSON.stringify({enabled:el.dataset.enabled!=='true'})});await load()}catch(error){showToast(error.message,true)}}});document.querySelectorAll('[data-client-reveal]').forEach(function(el){el.onclick=async function(){try{var data=await api('/api/admin/client-keys/'+el.dataset.clientReveal+'/reveal',{method:'POST'});showClientToken(data.token)}catch(error){showToast(error.message,true)}}});document.querySelectorAll('[data-client-delete]').forEach(function(el){el.onclick=async function(){if(!confirm('Удалить клиентский ключ «'+el.dataset.name+'»?'))return;try{await api('/api/admin/client-keys/'+el.dataset.clientDelete,{method:'DELETE'});await load()}catch(error){showToast(error.message,true)}}})}
+      function renderClientKeys(keys){
+        currentClientKeys=keys;
+        document.getElementById('clientKeyCount').textContent=keys.length;
+        var content=document.getElementById('clientKeyContent');
+        if(!keys.length){content.innerHTML='<div class="empty"><div class="empty-icon">'+icon('M3 5h18v14H3zM7 15h4M7 10h10')+'</div><h3>Нет клиентских ключей</h3><p>Создайте токен доступа для себя или друга (Cursor, Claude Code, скрипты).</p></div>';return}
+        var rows=keys.map(function(k){
+          var limitInfo=k.daily_request_limit>0?('сегодня '+Number(k.daily_requests||0)+' / '+k.daily_request_limit):'без лимита';
+          return '<tr><td><div class="key-name">'+esc(k.name)+'</div><div class="key-id">'+esc(k.id)+'</div></td><td><span class="mask">'+esc(k.mask)+'</span></td><td><span class="badge '+(k.enabled?'on':'off')+'">'+(k.enabled?'Активен':'Отключён')+'</span></td><td><div>'+Number(k.uses||0)+' запр.</div><div class="muted" style="font-size:11px;margin-top:2px">'+esc(limitInfo)+'</div></td><td><div style="font-variant-numeric:tabular-nums">↓ '+fmtTokens(k.input_tokens)+' · ↑ '+fmtTokens(k.output_tokens)+'</div></td><td class="muted">'+esc(dateText(k.last_used))+'</td><td><div class="actions"><button class="switch '+(k.enabled?'on':'')+'" data-client-toggle="'+esc(k.id)+'" data-enabled="'+k.enabled+'" aria-label="Переключить клиентский ключ '+esc(k.name)+'"><span></span></button><button class="btn sm" type="button" data-client-edit="'+esc(k.id)+'" aria-label="Настроить '+esc(k.name)+'">Лимит</button><button class="btn icon" type="button" data-client-reveal="'+esc(k.id)+'" aria-label="Показать клиентский ключ '+esc(k.name)+'" title="Показать ключ">'+icon('M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12m10-3a3 3 0 1 0 0 6 3 3 0 0 0 0-6')+'</button><button class="btn icon danger" type="button" data-client-delete="'+esc(k.id)+'" data-name="'+esc(k.name)+'" aria-label="Удалить клиентский ключ '+esc(k.name)+'" title="Удалить">'+icon('M4 7h16M9 7V4h6v3m-9 0 1 14h10l1-14M10 11v6m4-6v6')+'</button></div></td></tr>';
+        }).join('');
+        content.innerHTML='<div class="table-wrap" tabindex="0" role="region" aria-label="Клиентские API-ключи"><table><thead><tr><th>Пользователь / устройство</th><th>Маска ключа</th><th>Статус</th><th>Запросы и лимит</th><th>Токены (In / Out)</th><th>Последний вызов</th><th style="text-align:right">Действия</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+        document.querySelectorAll('[data-client-toggle],[data-client-edit],[data-client-reveal],[data-client-delete]').forEach(function(el){el.disabled=adminRole!=='admin'});
+        document.querySelectorAll('[data-client-toggle]').forEach(function(el){el.onclick=async function(){try{await api('/api/admin/client-keys/'+el.dataset.clientToggle,{method:'PATCH',body:JSON.stringify({enabled:el.dataset.enabled!=='true'})});await load()}catch(error){showToast(error.message,true)}}});
+        document.querySelectorAll('[data-client-edit]').forEach(function(el){el.onclick=function(){openClientKeyModal(el.dataset.clientEdit)}});
+        document.querySelectorAll('[data-client-reveal]').forEach(function(el){el.onclick=async function(){try{var data=await api('/api/admin/client-keys/'+el.dataset.clientReveal+'/reveal',{method:'POST'});showClientToken(data.token)}catch(error){showToast(error.message,true)}}});
+        document.querySelectorAll('[data-client-delete]').forEach(function(el){el.onclick=async function(){if(!confirm('Удалить клиентский ключ «'+el.dataset.name+'»?'))return;try{await api('/api/admin/client-keys/'+el.dataset.clientDelete,{method:'DELETE'});await load()}catch(error){showToast(error.message,true)}}});
+      }
       function showClientToken(value){document.getElementById('revealedToken').value=value;revealDialog.showModal()}
 
-      function renderKeys(keys){currentKeys=keys;var term=document.getElementById('keySearch').value.toLowerCase();var filtered=keys.filter(function(k){return [k.name,k.provider_name,k.base_url,(k.models||[]).join(' ')].join(' ').toLowerCase().includes(term)});var pages=Math.max(1,Math.ceil(filtered.length/12));keyPage=Math.min(keyPage,pages-1);document.getElementById('keyPageLabel').textContent=(keyPage+1)+' / '+pages+' · '+filtered.length+' ключей';document.getElementById('keyPrev').disabled=keyPage===0;document.getElementById('keyNext').disabled=keyPage>=pages-1;document.getElementById('keyCount').textContent=keys.length;var content=document.getElementById('keyContent');if(!keys.length){content.innerHTML='<div class="empty"><div class="empty-icon">'+icon('M14 7a4 4 0 1 0-7.5 2H3v4h3v3h3v-3h2l1.5-1.5')+'</div><h3>Нет сохранённых ключей</h3><p>Добавьте API-ключ провайдера для балансировки и автоматического failover.</p><button class="btn primary" id="emptyAdd" type="button">Добавить первый ключ</button></div>';document.getElementById('emptyAdd').onclick=openAdd;return}var rows=filtered.slice(keyPage*12,keyPage*12+12).map(function(k){var cooling=!!k.cooldown_until;var state=k.provider_blocked?'Провайдер откл.':(k.network_blocked?'Маршрут недоступен':(cooling?'Cooldown':(k.enabled?'Активен':'Отключён')));var badge=k.provider_blocked||k.network_blocked||cooling?'cool':(k.enabled?'on':'off');return '<tr><td><div class="key-name">'+esc(k.name)+'</div><div class="key-id">'+esc(k.id)+'</div></td><td><div class="key-name">'+esc(k.provider_name||'Legacy endpoint')+'</div><div class="muted" style="font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span>'+esc(k.base_url||defaultUpstream)+'</span>'+protoBadge(k.api_protocol||'responses')+'</div><div class="route-label">'+esc(routeLabel(k))+'</div></td><td><span class="mask">'+esc(k.mask)+'</span></td><td><span class="badge '+badge+'"><span class="dot '+(cooling?'warn':(k.enabled?'good':''))+'"></span>'+state+'</span></td><td><div>'+k.uses+' запр.</div><div class="muted" style="font-size:11px;margin-top:3px">'+k.failures+' ошибок</div></td><td class="muted">'+esc(cooling?('До '+dateText(k.cooldown_until)):dateText(k.last_used))+'</td><td><div class="actions"><button class="switch '+(k.enabled?'on':'')+'" data-toggle="'+esc(k.id)+'" data-enabled="'+k.enabled+'" aria-pressed="'+k.enabled+'" aria-label="'+(k.enabled?'Отключить':'Включить')+' '+esc(k.name)+'"><span></span></button><button class="btn sm" data-edit-key="'+esc(k.id)+'" aria-label="Редактировать '+esc(k.name)+'">Ключ</button><button class="btn icon" data-policy="'+esc(k.id)+'" title="Лимиты и маршрутизация" aria-label="Политика '+esc(k.name)+'"'+(adminRole==='admin'?'':' disabled')+'>'+icon('M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6')+'</button><button class="btn icon" data-test="'+esc(k.id)+'" title="Проверить ключ" aria-label="Проверить '+esc(k.name)+'">'+icon('M5 12h14M13 6l6 6-6 6')+'</button><button class="btn icon danger" data-delete="'+esc(k.id)+'" data-name="'+esc(k.name)+'" title="Удалить" aria-label="Удалить '+esc(k.name)+'">'+icon('M4 7h16M9 7V4h6v3m-9 0 1 14h10l1-14M10 11v6m4-6v6')+'</button></div></td></tr>'}).join('');content.innerHTML='<div class="table-wrap" tabindex="0" role="region" aria-label="API-ключи провайдеров"><table><thead><tr><th>Название</th><th>Провайдер и маршрут</th><th>Маска</th><th>Статус</th><th>Трафик</th><th>Активность</th><th style="text-align:right">Действия</th></tr></thead><tbody>'+rows+'</tbody></table></div>';bindRows()}
+      function renderAccounts(accounts){
+        currentAccounts=accounts;
+        document.getElementById('accountCount').textContent=accounts.length;
+        var content=document.getElementById('accountContent');
+        if(!accounts.length){content.innerHTML='<div class="empty"><p>Аккаунты не найдены</p></div>';return}
+        var rows=accounts.map(function(a){
+          var isEnv=a.source==='env';
+          var isSelf=String(a.name||'').toLowerCase()===String(currentAdmin.name||'').toLowerCase();
+          var roleBadge=a.role==='admin'?'<span class="proto-pill">admin</span>':'<span class="proto-pill proto-chat-completions">viewer (просмотр)</span>';
+          var srcBadge=isEnv?'<span class="mask">ENV</span>':'<span class="mask">UI</span>';
+          return '<tr><td><div class="key-name">'+esc(a.name)+(isSelf?' <span class="muted" style="font-weight:500">(вы)</span>':'')+'</div></td><td>'+roleBadge+'</td><td>'+srcBadge+(a.has_totp?' <span class="muted" style="font-size:11px">+ 2FA</span>':'')+'</td><td><span class="badge '+(a.enabled?'on':'off')+'">'+(a.enabled?'Активен':'Отключён')+'</span></td><td class="muted">'+(a.password_set?'Установлен':'Не задан')+'</td><td><div class="actions">'+(isEnv?'<span class="muted" style="font-size:12px">Из окружения</span>':'<button class="switch '+(a.enabled?'on':'')+'" data-account-toggle="'+esc(a.name)+'" data-enabled="'+a.enabled+'"'+(isSelf?' disabled':'')+' aria-label="Переключить аккаунт '+esc(a.name)+'"><span></span></button><button class="btn sm" type="button" data-account-edit="'+esc(a.name)+'">Изменить</button><button class="btn icon danger" type="button" data-account-delete="'+esc(a.name)+'"'+(isSelf?' disabled':'')+' aria-label="Удалить аккаунт '+esc(a.name)+'" title="Удалить">'+icon('M4 7h16M9 7V4h6v3m-9 0 1 14h10l1-14M10 11v6m4-6v6')+'</button>')+'</div></td></tr>';
+        }).join('');
+        content.innerHTML='<div class="table-wrap" tabindex="0" role="region" aria-label="Аккаунты панели управления"><table><thead><tr><th>Логин</th><th>Роль</th><th>Источник</th><th>Статус</th><th>Пароль</th><th style="text-align:right">Действия</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+        content.querySelectorAll('[data-account-toggle]').forEach(function(el){el.onclick=async function(){try{await api('/api/admin/accounts/'+encodeURIComponent(el.dataset.accountToggle),{method:'PATCH',body:JSON.stringify({enabled:el.dataset.enabled!=='true'})});showToast('Статус аккаунта обновлён');await load()}catch(e){showToast(e.message,true)}}});
+        content.querySelectorAll('[data-account-edit]').forEach(function(el){el.onclick=function(){openAccountModal(el.dataset.accountEdit)}});
+        content.querySelectorAll('[data-account-delete]').forEach(function(el){el.onclick=async function(){if(!confirm('Удалить аккаунт «'+el.dataset.accountDelete+'» и отозвать его сессии?'))return;try{await api('/api/admin/accounts/'+encodeURIComponent(el.dataset.accountDelete),{method:'DELETE'});showToast('Аккаунт удалён');await load()}catch(e){showToast(e.message,true)}}});
+      }
+
+      function renderKeys(keys){currentKeys=keys;var term=document.getElementById('keySearch').value.toLowerCase();var filtered=keys.filter(function(k){var prefModels=k.provider_prefix?(k.models||[]).map(function(m){return k.provider_prefix+'/'+m}).join(' '):'';return [k.name,k.provider_name,k.provider_prefix,k.base_url,(k.models||[]).join(' '),prefModels].join(' ').toLowerCase().includes(term)});var pages=Math.max(1,Math.ceil(filtered.length/12));keyPage=Math.min(keyPage,pages-1);document.getElementById('keyPageLabel').textContent=(keyPage+1)+' / '+pages+' · '+filtered.length+' ключей';document.getElementById('keyPrev').disabled=keyPage===0;document.getElementById('keyNext').disabled=keyPage>=pages-1;document.getElementById('keyCount').textContent=keys.length;var content=document.getElementById('keyContent');if(!keys.length){content.innerHTML='<div class="empty"><div class="empty-icon">'+icon('M14 7a4 4 0 1 0-7.5 2H3v4h3v3h3v-3h2l1.5-1.5')+'</div><h3>Нет сохранённых ключей</h3><p>Добавьте API-ключ провайдера для балансировки и автоматического failover.</p><button class="btn primary" id="emptyAdd" type="button">Добавить первый ключ</button></div>';document.getElementById('emptyAdd').onclick=openAdd;return}var rows=filtered.slice(keyPage*12,keyPage*12+12).map(function(k){var cooling=!!k.cooldown_until;var state=k.provider_blocked?'Провайдер откл.':(k.network_blocked?'Маршрут недоступен':(cooling?'Cooldown':(k.enabled?'Активен':'Отключён')));var badge=k.provider_blocked||k.network_blocked||cooling?'cool':(k.enabled?'on':'off');return '<tr><td><div class="key-name">'+esc(k.name)+'</div><div class="key-id">'+esc(k.id)+'</div></td><td><div class="key-name">'+esc(k.provider_name||'Legacy endpoint')+'</div><div class="muted" style="font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span>'+esc(k.base_url||defaultUpstream)+'</span>'+protoBadge(k.api_protocol||'responses')+'</div><div class="route-label">'+esc(routeLabel(k))+'</div></td><td><span class="mask">'+esc(k.mask)+'</span></td><td><span class="badge '+badge+'"><span class="dot '+(cooling?'warn':(k.enabled?'good':''))+'"></span>'+state+'</span></td><td><div>'+k.uses+' запр.</div><div class="muted" style="font-size:11px;margin-top:3px">'+k.failures+' ошибок</div></td><td class="muted">'+esc(cooling?('До '+dateText(k.cooldown_until)):dateText(k.last_used))+'</td><td><div class="actions"><button class="switch '+(k.enabled?'on':'')+'" data-toggle="'+esc(k.id)+'" data-enabled="'+k.enabled+'" aria-pressed="'+k.enabled+'" aria-label="'+(k.enabled?'Отключить':'Включить')+' '+esc(k.name)+'"><span></span></button><button class="btn sm" data-edit-key="'+esc(k.id)+'" aria-label="Редактировать '+esc(k.name)+'">Ключ</button><button class="btn icon" data-policy="'+esc(k.id)+'" title="Лимиты и маршрутизация" aria-label="Политика '+esc(k.name)+'"'+(adminRole==='admin'?'':' disabled')+'>'+icon('M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6')+'</button><button class="btn icon" data-test="'+esc(k.id)+'" title="Проверить ключ" aria-label="Проверить '+esc(k.name)+'">'+icon('M5 12h14M13 6l6 6-6 6')+'</button><button class="btn icon danger" data-delete="'+esc(k.id)+'" data-name="'+esc(k.name)+'" title="Удалить" aria-label="Удалить '+esc(k.name)+'">'+icon('M4 7h16M9 7V4h6v3m-9 0 1 14h10l1-14M10 11v6m4-6v6')+'</button></div></td></tr>'}).join('');content.innerHTML='<div class="table-wrap" tabindex="0" role="region" aria-label="API-ключи провайдеров"><table><thead><tr><th>Название</th><th>Провайдер и маршрут</th><th>Маска</th><th>Статус</th><th>Трафик</th><th>Активность</th><th style="text-align:right">Действия</th></tr></thead><tbody>'+rows+'</tbody></table></div>';bindRows()}
 
       function renderUsage(keys){keys=keys.slice().sort(function(a,b){return (b.uses||0)-(a.uses||0)}).slice(0,8);var el=document.getElementById('usageChart');if(!keys.length){el.innerHTML='<div class="muted">Запросов через пул пока не было</div>';return}var maxUses=Math.max.apply(null,keys.map(function(k){return k.uses||0}).concat([1]));el.innerHTML=keys.map(function(k){var pct=Math.max(3,Math.round((k.uses||0)*100/maxUses));return '<div class="chart-row"><span class="chart-name">'+esc(k.name)+'</span><div class="bar-track"><div class="bar-fill" style="width:'+pct+'%"></div></div><span class="chart-stat">'+k.uses+' · $'+Number(k.monthly_spend_usd||0).toFixed(3)+'</span></div>'}).join('')}
 
@@ -2030,7 +2381,85 @@
       document.getElementById('exportBtn').onclick=async function(){try{var headers={};if(session&&session!=='cookie')headers['X-Admin-Session']=session;var response=await fetch('/api/admin/backup',{credentials:'same-origin',headers:headers});if(response.status===401){lock();return}if(!response.ok)throw new Error('Ошибка экспорта бэкапа');var blob=await response.blob();var link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='agentrouter-keys-backup.json';link.click();URL.revokeObjectURL(link.href)}catch(error){showToast(error.message,true)}};
       document.getElementById('importBtn').onclick=function(){document.getElementById('importFile').click()};document.getElementById('importFile').onchange=async function(){if(!this.files[0])return;if(!confirm('Заменить текущий зашифрованный пул ключей выбранной резервной копией?'))return;try{var response=await fetch('/api/admin/backup',{method:'POST',headers:Object.assign({'X-Admin-CSRF':'1','Content-Type':'application/json'},session&&session!=='cookie'?{'X-Admin-Session':session}:{}),credentials:'same-origin',body:await this.files[0].text()});if(response.status===401){lock();return}var data=await response.json().catch(function(){return {}});if(!response.ok)throw new Error(data.error&&data.error.message||'Ошибка импорта');showToast('Резервная копия импортирована');await load()}catch(error){showToast(error.message,true)}finally{this.value=''}};
 
-      document.getElementById('createClientKeyBtn').onclick=function(){document.getElementById('clientKeyForm').reset();clientKeyDialog.showModal();document.getElementById('clientKeyName').focus()};document.getElementById('clientKeyForm').onsubmit=async function(e){e.preventDefault();try{var data=await api('/api/admin/client-keys',{method:'POST',body:JSON.stringify({name:document.getElementById('clientKeyName').value})});clientKeyDialog.close();showClientToken(data.token);await load()}catch(error){showToast(error.message,true)}};document.querySelectorAll('[data-client-close]').forEach(function(el){el.onclick=function(){clientKeyDialog.close()}});document.querySelectorAll('[data-reveal-close]').forEach(function(el){el.onclick=function(){revealDialog.close()}});document.getElementById('copyClientTokenBtn').onclick=async function(){try{await navigator.clipboard.writeText(document.getElementById('revealedToken').value);showToast('Клиентский ключ скопирован')}catch(error){showToast('Не удалось скопировать',true)}};
+      function openClientKeyModal(id){
+        if(adminRole!=='admin')return;
+        document.getElementById('clientKeyForm').reset();
+        var k=currentClientKeys.find(function(x){return x.id===id});
+        document.getElementById('clientKeyEditId').value=k?k.id:'';
+        document.getElementById('clientKeyName').value=k?k.name:'';
+        document.getElementById('clientKeyDailyLimit').value=k?Number(k.daily_request_limit||0):0;
+        document.getElementById('clientKeyDialogTitle').textContent=k?'Настроить клиентский ключ':'Новый клиентский ключ';
+        document.getElementById('clientKeySubmitBtn').textContent=k?'Сохранить':'Сгенерировать';
+        clientKeyDialog.showModal();
+        document.getElementById('clientKeyName').focus();
+      }
+      document.getElementById('createClientKeyBtn').onclick=function(){openClientKeyModal('')};
+      document.getElementById('clientKeyForm').onsubmit=async function(e){
+        e.preventDefault();
+        var editId=document.getElementById('clientKeyEditId').value;
+        var payload={name:document.getElementById('clientKeyName').value,daily_request_limit:Number(document.getElementById('clientKeyDailyLimit').value||0)};
+        try{
+          if(editId){
+            await api('/api/admin/client-keys/'+editId,{method:'PATCH',body:JSON.stringify(payload)});
+            clientKeyDialog.close();
+            showToast('Клиентский ключ обновлён');
+          }else{
+            var data=await api('/api/admin/client-keys',{method:'POST',body:JSON.stringify(payload)});
+            clientKeyDialog.close();
+            showClientToken(data.token);
+          }
+          await load();
+        }catch(error){showToast(error.message,true)}
+      };
+      document.querySelectorAll('[data-client-close]').forEach(function(el){el.onclick=function(){clientKeyDialog.close()}});
+      document.querySelectorAll('[data-reveal-close]').forEach(function(el){el.onclick=function(){revealDialog.close()}});
+
+      function openAccountModal(editName){
+        if(adminRole!=='admin')return;
+        document.getElementById('accountForm').reset();
+        var acc=currentAccounts.find(function(a){return a.name===editName});
+        document.getElementById('accountEditMode').value=acc?acc.name:'';
+        var nameInput=document.getElementById('accountUserName');
+        var passInput=document.getElementById('accountUserPassword');
+        nameInput.value=acc?acc.name:'';
+        nameInput.disabled=!!acc;
+        document.getElementById(acc&&acc.role==='admin'?'accountRoleAdmin':'accountRoleViewer').checked=true;
+        document.getElementById('accountUserEnabled').checked=acc?acc.enabled:true;
+        document.getElementById('accountUserEnabled').disabled=!!(acc&&String(acc.name).toLowerCase()===String(currentAdmin.name||'').toLowerCase());
+        passInput.value='';
+        passInput.required=!acc;
+        passInput.placeholder=acc?'Оставьте пустым, чтобы не менять пароль':'Минимум 12 символов';
+        document.getElementById('accountPasswordLabelText').textContent=acc?'Новый пароль (опционально)':'Пароль (от 12 символов)';
+        document.getElementById('accountDialogTitle').textContent=acc?('Изменить аккаунт «'+acc.name+'»'):'Добавить аккаунт панели';
+        document.getElementById('accountSubmitBtn').textContent=acc?'Сохранить аккаунт':'Создать аккаунт';
+        accountDialog.showModal();
+        (acc?passInput:nameInput).focus();
+      }
+      document.getElementById('createAccountBtn').onclick=function(){openAccountModal('')};
+      document.querySelectorAll('[data-account-close]').forEach(function(el){el.onclick=function(){accountDialog.close()}});
+      accountDialog.addEventListener('close',function(){var p=document.getElementById('accountUserPassword');p.value='';p.type='password';var t=accountDialog.querySelector('[data-password-toggle]');if(t){t.textContent='Показать';t.setAttribute('aria-pressed','false');t.setAttribute('aria-label','Показать пароль')}});
+      document.getElementById('accountForm').onsubmit=async function(e){
+        e.preventDefault();
+        var btn=document.getElementById('accountSubmitBtn');btn.disabled=true;
+        var editName=document.getElementById('accountEditMode').value;
+        var role=document.getElementById('accountRoleAdmin').checked?'admin':'viewer';
+        var enabled=document.getElementById('accountUserEnabled').checked;
+        var pwd=document.getElementById('accountUserPassword').value;
+        try{
+          if(editName){
+            var patch={role:role,enabled:enabled};
+            if(pwd)patch.password=pwd;
+            await api('/api/admin/accounts/'+encodeURIComponent(editName),{method:'PATCH',body:JSON.stringify(patch)});
+            showToast('Аккаунт обновлён');
+          }else{
+            await api('/api/admin/accounts',{method:'POST',body:JSON.stringify({name:document.getElementById('accountUserName').value.trim(),role:role,password:pwd,enabled:enabled})});
+            showToast('Аккаунт создан');
+          }
+          document.getElementById('accountUserPassword').value='';
+          accountDialog.close();
+          await load();
+        }catch(err){showToast(err.message,true)}finally{btn.disabled=false}
+      };
 
       // Mandatory fallback for browsers without declarative <dialog closedby="any">
       if(!('closedBy' in HTMLDialogElement.prototype)){
@@ -2071,10 +2500,21 @@
       document.getElementById('keyProtocol').onchange=function(){handleProtocolChange('keyProtocol','keyBaseURL',defaultUpstream)};document.getElementById('policyProtocol').onchange=function(){handleProtocolChange('policyProtocol','policyBaseURL','')};document.getElementById('providerProtocol').onchange=function(){handleProtocolChange('providerProtocol','providerBaseURL',defaultUpstream)};
 
       var providerDialog=document.getElementById('providerDialog');
-      function openProvider(id){if(adminRole!=='admin')return;document.getElementById('providerForm').reset();var p=currentProviders.find(function(p){return p.id===id});document.getElementById('providerEditId').value=id||'';document.getElementById('providerName').value=p?p.name:'';document.getElementById('providerBaseURL').value=p?p.base_url:defaultUpstream;document.getElementById('providerProtocol').value=p?p.api_protocol:'responses';document.getElementById('providerProfile').value=p?p.spoof_profile||'':'';document.getElementById('providerModels').value=p?(p.models||[]).join('\n'):'';document.getElementById('providerEnabled').checked=p?p.enabled:true;document.getElementById('providerDialogTitle').textContent=p?'Редактировать провайдер':'Добавить провайдер';providerDialog.showModal()}
+      function updateProviderPrefixPreview(){
+        var rawPref=document.getElementById('providerPrefix').value.trim().toLowerCase().replace(/\/+$/,'');
+        var eff=rawPref||slugPrefix(document.getElementById('providerName').value);
+        document.getElementById('providerPrefix').placeholder=slugPrefix(document.getElementById('providerName').value);
+        var sampleModel=(document.getElementById('providerModels').value.split(/[\n,]/).map(function(v){return v.trim()}).filter(Boolean)[0])||'model';
+        if(sampleModel.toLowerCase().indexOf(eff+'/')===0&&sampleModel.length>eff.length+1)sampleModel=sampleModel.slice(eff.length+1);
+        document.getElementById('providerPrefixPreview').textContent=eff+'/'+sampleModel;
+      }
+      ['providerName','providerPrefix','providerModels'].forEach(function(id){
+        document.getElementById(id).addEventListener('input',updateProviderPrefixPreview);
+      });
+      function openProvider(id){if(adminRole!=='admin')return;document.getElementById('providerForm').reset();var p=currentProviders.find(function(p){return p.id===id});document.getElementById('providerEditId').value=id||'';document.getElementById('providerName').value=p?p.name:'';document.getElementById('providerPrefix').value=p&&p.model_prefix?p.model_prefix:'';document.getElementById('providerBaseURL').value=p?p.base_url:defaultUpstream;document.getElementById('providerProtocol').value=p?p.api_protocol:'responses';document.getElementById('providerProfile').value=p?p.spoof_profile||'':'';document.getElementById('providerModels').value=p?(p.models||[]).join('\n'):'';document.getElementById('providerEnabled').checked=p?p.enabled:true;document.getElementById('providerDialogTitle').textContent=p?'Редактировать провайдер':'Добавить провайдер';updateProviderPrefixPreview();providerDialog.showModal()}
       document.getElementById('addProviderBtn').onclick=function(){openProvider('')};document.querySelectorAll('[data-provider-close]').forEach(function(el){el.onclick=function(){providerDialog.close()}});
-      document.getElementById('providerForm').onsubmit=async function(e){e.preventDefault();var button=this.querySelector('[type="submit"]');button.disabled=true;try{var id=document.getElementById('providerEditId').value;var input={name:document.getElementById('providerName').value,base_url:document.getElementById('providerBaseURL').value.trim(),api_protocol:document.getElementById('providerProtocol').value,spoof_profile:document.getElementById('providerProfile').value,models:document.getElementById('providerModels').value.split(/[\n,]/).map(function(v){return v.trim()}).filter(Boolean),enabled:document.getElementById('providerEnabled').checked};await api('/api/admin/providers'+(id?'/'+id:''),{method:id?'PATCH':'POST',body:JSON.stringify(input)});providerDialog.close();showToast('Провайдер и каталог моделей сохранены');await load()}catch(e){showToast(e.message,true)}finally{button.disabled=false}};
-      function renderProviders(providers){currentProviders=providers;var content=document.getElementById('providerContent');if(!providers.length){content.innerHTML='<div class="card empty"><div class="empty-icon">'+icon('M12 3 3 8l9 5 9-5-9-5ZM3 12l9 5 9-5')+'</div><h3>Провайдеры ещё не добавлены</h3><p>Создайте провайдер с URL и списком моделей, чтобы привязывать к нему API-ключи.</p></div>';return}content.innerHTML=providers.map(function(p){return '<article class="card"><div class="card-head"><h3>'+esc(p.name)+'</h3><span class="badge '+(p.enabled?'on':'off')+'">'+(p.enabled?'Активен':'Отключён')+'</span></div><div class="provider-body"><div class="provider-endpoint"><span class="provider-url">'+esc(p.base_url)+'</span><br>'+protoBadge(p.api_protocol)+' · '+p.keys+' ключей · '+p.models.length+' моделей</div><div class="model-list">'+(p.models.length?p.models.map(function(m){return '<span class="model-chip">'+esc(m)+'</span>'}).join(''):'<span class="muted">Модели не заданы</span>')+'</div><div class="modal-actions"><button class="btn sm" type="button" data-provider-edit="'+esc(p.id)+'">Настроить модели</button><button class="btn sm danger" type="button" data-provider-delete="'+esc(p.id)+'">Удалить</button></div></div></article>'}).join('');content.querySelectorAll('button').forEach(function(el){el.disabled=adminRole!=='admin'});content.querySelectorAll('[data-provider-edit]').forEach(function(el){el.onclick=function(){openProvider(el.dataset.providerEdit)}});content.querySelectorAll('[data-provider-delete]').forEach(function(el){el.onclick=async function(){if(!confirm('Удалить провайдер? Сначала переназначьте привязанные ключи.'))return;try{await api('/api/admin/providers/'+el.dataset.providerDelete,{method:'DELETE'});showToast('Провайдер удалён');await load()}catch(e){showToast(e.message,true)}}})}
+      document.getElementById('providerForm').onsubmit=async function(e){e.preventDefault();var button=this.querySelector('[type="submit"]');button.disabled=true;try{var id=document.getElementById('providerEditId').value;var input={name:document.getElementById('providerName').value,model_prefix:document.getElementById('providerPrefix').value.trim(),base_url:document.getElementById('providerBaseURL').value.trim(),api_protocol:document.getElementById('providerProtocol').value,spoof_profile:document.getElementById('providerProfile').value,models:document.getElementById('providerModels').value.split(/[\n,]/).map(function(v){return v.trim()}).filter(Boolean),enabled:document.getElementById('providerEnabled').checked};await api('/api/admin/providers'+(id?'/'+id:''),{method:id?'PATCH':'POST',body:JSON.stringify(input)});providerDialog.close();showToast('Провайдер и каталог моделей сохранены');await load()}catch(e){showToast(e.message,true)}finally{button.disabled=false}};
+      function renderProviders(providers){currentProviders=providers;var content=document.getElementById('providerContent');if(!providers.length){content.innerHTML='<div class="card empty"><div class="empty-icon">'+icon('M12 3 3 8l9 5 9-5-9-5ZM3 12l9 5 9-5')+'</div><h3>Провайдеры ещё не добавлены</h3><p>Создайте провайдер с URL и списком моделей, чтобы привязывать к нему API-ключи.</p></div>';return}content.innerHTML=providers.map(function(p,pIdx){var pref=providerPrefix(p);var chips=p.models.length?p.models.map(function(m,mIdx){var fullId=pref+'/'+m;var domId='model-chip-'+pIdx+'-'+mIdx;return '<span class="model-chip"><code id="'+domId+'"><span class="chip-prefix">'+esc(pref)+'/</span>'+esc(m)+'</code>'+copyBtnMarkup(domId,'Скопировать модель '+fullId)+'</span>'}).join(''):'<span class="muted">Модели не заданы</span>';return '<article class="card"><div class="card-head"><h3>'+esc(p.name)+'</h3><span class="badge '+(p.enabled?'on':'off')+'">'+(p.enabled?'Активен':'Отключён')+'</span></div><div class="provider-body"><div class="provider-endpoint"><span class="provider-url">'+esc(p.base_url)+'</span><br>'+protoBadge(p.api_protocol)+' · <span class="prefix-pill" title="Внутренний префикс моделей">'+esc(pref)+'/…</span> · '+p.keys+' ключей · '+p.models.length+' моделей</div><div class="model-list">'+chips+'</div><div class="modal-actions"><button class="btn sm" type="button" data-provider-edit="'+esc(p.id)+'">Настроить модели</button><button class="btn sm danger" type="button" data-provider-delete="'+esc(p.id)+'">Удалить</button></div></div></article>'}).join('');content.querySelectorAll('[data-provider-edit],[data-provider-delete]').forEach(function(el){el.disabled=adminRole!=='admin'});content.querySelectorAll('[data-provider-edit]').forEach(function(el){el.onclick=function(){openProvider(el.dataset.providerEdit)}});content.querySelectorAll('[data-provider-delete]').forEach(function(el){el.onclick=async function(){if(!confirm('Удалить провайдер? Сначала переназначьте привязанные ключи.'))return;try{await api('/api/admin/providers/'+el.dataset.providerDelete,{method:'DELETE'});showToast('Провайдер удалён');await load()}catch(e){showToast(e.message,true)}}})}
 
       function binding(id){var value=document.getElementById(id).value;return {proxy_mode:value==='auto'||value==='direct'?value:'fixed',proxy_id:value==='auto'||value==='direct'?'':value}}
       function fillRoutes(id,value){var el=document.getElementById(id);el.innerHTML='<option value="auto">Автоматическая привязка</option><option value="direct">Напрямую (без прокси)</option>'+currentProxies.map(function(p){return '<option value="'+esc(p.id)+'">'+esc(p.name)+(p.enabled?'':' (откл.)')+'</option>'}).join('');el.value=value||'auto'}
@@ -2123,6 +2563,7 @@
       }
       function eventMeta(item){
         var parts=[];
+        if(item.client_name)parts.push('Клиент: '+item.client_name);
         if(item.model)parts.push('Модель: '+item.model);
         if(item.provider)parts.push('API: '+item.provider);
         if(item.key_name)parts.push('Ключ: '+item.key_name+(item.key_mask?' ('+item.key_mask+')':''));
@@ -2132,7 +2573,7 @@
         return parts.join(' · ');
       }
       function eventDetails(item){
-        var labels={request_id:'Request ID',message:'Событие',category:'Категория',method:'Метод',path:'Endpoint',status:'HTTP клиенту',upstream_status:'HTTP upstream',duration_ms:'Время, мс',model:'Модель',provider:'Провайдер',provider_id:'Provider ID',key_name:'Имя ключа',key_mask:'Маска ключа',key_id:'Key ID',network_route:'Сетевой маршрут',proxy_id:'Proxy ID',upstream_host:'Upstream host',upstream_protocol:'Протокол',upstream_path:'Upstream path',attempts:'Попытки',input_tokens:'Input tokens',output_tokens:'Output tokens',bytes:'Байты клиенту',error_code:'Код ошибки',response_interrupted:'Ответ прерван',tool:'Инструмент',call_id:'Tool call ID',arguments_length:'Размер аргументов',returned:'Получено tools',forwarded:'Передано tools',failed_provider:'Предыдущий API',failed_key_name:'Предыдущий ключ',next_provider:'Следующий API',next_key_name:'Следующий ключ',failed_network_route:'Предыдущий маршрут',next_network_route:'Следующий маршрут',checked:'Проверено',accepted:'Принято',failed:'Ошибок',inconclusive:'Не подтверждено',reason:'Причина',name:'Название',admin:'Администратор',role:'Роль',enabled:'Включён',credential_replaced:'Credential заменён',selection_mode:'Routing mode',attempt:'Повтор',max_retries:'Лимит повторов'};
+        var labels={request_id:'Request ID',message:'Событие',category:'Категория',method:'Метод',path:'Endpoint',status:'HTTP клиенту',upstream_status:'HTTP upstream',duration_ms:'Время, мс',client_name:'Клиентский ключ',client_id:'Client ID',model:'Модель',upstream_model:'Upstream модель',provider:'Провайдер',provider_id:'Provider ID',key_name:'Имя ключа',key_mask:'Маска ключа',key_id:'Key ID',network_route:'Сетевой маршрут',proxy_id:'Proxy ID',upstream_host:'Upstream host',upstream_protocol:'Протокол',upstream_path:'Upstream path',attempts:'Попытки',input_tokens:'Input tokens',output_tokens:'Output tokens',bytes:'Байты клиенту',error_code:'Код ошибки',response_interrupted:'Ответ прерван',tool:'Инструмент',call_id:'Tool call ID',arguments_length:'Размер аргументов',returned:'Получено tools',forwarded:'Передано tools',failed_provider:'Предыдущий API',failed_key_name:'Предыдущий ключ',next_provider:'Следующий API',next_key_name:'Следующий ключ',failed_network_route:'Предыдущий маршрут',next_network_route:'Следующий маршрут',checked:'Проверено',accepted:'Принято',failed:'Ошибок',inconclusive:'Не подтверждено',reason:'Причина',name:'Название',admin:'Администратор',role:'Роль',enabled:'Включён',credential_replaced:'Credential заменён',selection_mode:'Routing mode',attempt:'Повтор',max_retries:'Лимит повторов'};
         return Object.keys(labels).filter(function(k){return item[k]!=null&&item[k]!==''}).map(function(k){return '<dt>'+esc(labels[k])+'</dt><dd>'+esc(typeof item[k]==='object'?JSON.stringify(item[k]):item[k])+'</dd>'}).join('');
       }
       function drawLogs(){

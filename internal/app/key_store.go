@@ -25,6 +25,7 @@ var errNoEnabledAPIKeys = errors.New("no enabled API keys in the key pool")
 type persistedKeyFile struct {
 	AdminPasswords []savedAdminPassword    `json:"admin_passwords,omitempty"`
 	AdminSessions  []savedAdminSession     `json:"admin_sessions,omitempty"`
+	AdminUsers     []persistedAdminUser    `json:"admin_users,omitempty"`
 	Version        int                     `json:"version"`
 	Providers      []apiProvider           `json:"providers,omitempty"`
 	Proxies        []persistedNetworkProxy `json:"network_proxies,omitempty"`
@@ -34,29 +35,45 @@ type persistedKeyFile struct {
 }
 
 type persistedClientKey struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	Enabled    bool      `json:"enabled"`
-	Mask       string    `json:"mask"`
-	Nonce      string    `json:"nonce"`
-	Ciphertext string    `json:"ciphertext"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
-	Uses       uint64    `json:"uses,omitempty"`
-	LastUsed   time.Time `json:"last_used,omitempty"`
-	digest     [32]byte
-	hasDigest  bool
+	ID                string    `json:"id"`
+	Name              string    `json:"name"`
+	Enabled           bool      `json:"enabled"`
+	Mask              string    `json:"mask"`
+	Nonce             string    `json:"nonce"`
+	Ciphertext        string    `json:"ciphertext"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+	Uses              uint64    `json:"uses,omitempty"`
+	LastUsed          time.Time `json:"last_used,omitempty"`
+	InputTokens       uint64    `json:"input_tokens,omitempty"`
+	OutputTokens      uint64    `json:"output_tokens,omitempty"`
+	DailyRequestLimit int       `json:"daily_request_limit,omitempty"`
+	UsageDay          string    `json:"usage_day,omitempty"`
+	DailyRequests     int       `json:"daily_requests,omitempty"`
+	digest            [32]byte
+	hasDigest         bool
 }
 
 type clientKeyView struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	Enabled   bool       `json:"enabled"`
-	Mask      string     `json:"mask"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	Uses      uint64     `json:"uses"`
-	LastUsed  *time.Time `json:"last_used,omitempty"`
+	ID                string     `json:"id"`
+	Name              string     `json:"name"`
+	Enabled           bool       `json:"enabled"`
+	Mask              string     `json:"mask"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	Uses              uint64     `json:"uses"`
+	LastUsed          *time.Time `json:"last_used,omitempty"`
+	InputTokens       uint64     `json:"input_tokens"`
+	OutputTokens      uint64     `json:"output_tokens"`
+	DailyRequestLimit int        `json:"daily_request_limit"`
+	DailyRequests     int        `json:"daily_requests"`
+}
+
+type clientAuthResult struct {
+	ID            string
+	Name          string
+	Authenticated bool
+	RateLimited   bool
 }
 
 type persistedKeySettings struct {
@@ -102,6 +119,7 @@ type persistedAPIKey struct {
 type apiKeyView struct {
 	ProviderID           string     `json:"provider_id,omitempty"`
 	ProviderName         string     `json:"provider_name,omitempty"`
+	ProviderPrefix       string     `json:"provider_prefix,omitempty"`
 	NetworkBlocked       bool       `json:"network_blocked"`
 	ProviderBlocked      bool       `json:"provider_blocked"`
 	ID                   string     `json:"id"`
@@ -166,6 +184,7 @@ type selectedAPIKey struct {
 type apiKeyStore struct {
 	adminPasswords     []savedAdminPassword
 	savedAdminSessions []savedAdminSession
+	adminUsers         []persistedAdminUser
 	mu                 sync.Mutex
 	path               string
 	aead               cipher.AEAD
@@ -261,6 +280,7 @@ func (store *apiKeyStore) load() error {
 	}
 	store.adminPasswords = file.AdminPasswords
 	store.savedAdminSessions = file.AdminSessions
+	store.adminUsers = file.AdminUsers
 	store.keys = file.Keys
 	store.providers = file.Providers
 	store.proxies = file.Proxies
@@ -276,7 +296,8 @@ func (store *apiKeyStore) load() error {
 func (store *apiKeyStore) marshalStateLocked() ([]byte, error) {
 	file := persistedKeyFile{
 		AdminPasswords: store.adminPasswords, AdminSessions: store.savedAdminSessions,
-		Version: 2, Providers: store.providers, Proxies: store.proxies,
+		AdminUsers: store.adminUsers,
+		Version:    2, Providers: store.providers, Proxies: store.proxies,
 		Keys: store.keys, ClientKeys: store.clientKeys, Settings: store.settings,
 	}
 	return json.MarshalIndent(file, "", "  ")
@@ -904,7 +925,7 @@ func (store *apiKeyStore) exportBackup() ([]byte, error) {
 	if err := store.ready(); err != nil {
 		return nil, err
 	}
-	return json.MarshalIndent(persistedKeyFile{AdminPasswords: store.adminPasswords, Version: 2, Providers: store.providers, Proxies: store.proxies, Keys: store.keys, ClientKeys: store.clientKeys, Settings: store.settings}, "", "  ")
+	return json.MarshalIndent(persistedKeyFile{AdminPasswords: store.adminPasswords, AdminUsers: store.adminUsers, Version: 2, Providers: store.providers, Proxies: store.proxies, Keys: store.keys, ClientKeys: store.clientKeys, Settings: store.settings}, "", "  ")
 }
 
 func (store *apiKeyStore) importBackup(raw []byte) error {
@@ -952,13 +973,14 @@ func (store *apiKeyStore) importState(raw []byte, restoreSessions bool) error {
 		file.ClientKeys[i].digest = sha256.Sum256([]byte(plain))
 		file.ClientKeys[i].hasDigest = true
 	}
-	oldPasswords, oldSessions := store.adminPasswords, store.savedAdminSessions
+	oldPasswords, oldSessions, oldAdminUsers := store.adminPasswords, store.savedAdminSessions, store.adminUsers
 	old := store.keys
 	oldProviders := store.providers
 	oldProxies := store.proxies
 	oldClientKeys := store.clientKeys
 	oldSettings := store.settings
 	store.adminPasswords = file.AdminPasswords
+	store.adminUsers = file.AdminUsers
 	store.savedAdminSessions = nil
 	if restoreSessions {
 		store.savedAdminSessions = file.AdminSessions
@@ -973,7 +995,7 @@ func (store *apiKeyStore) importState(raw []byte, restoreSessions bool) error {
 	}
 	store.rebalanceProxiesLocked()
 	if err := store.saveLocked(); err != nil {
-		store.adminPasswords, store.savedAdminSessions = oldPasswords, oldSessions
+		store.adminPasswords, store.savedAdminSessions, store.adminUsers = oldPasswords, oldSessions, oldAdminUsers
 		store.keys = old
 		store.providers = oldProviders
 		store.proxies = oldProxies
@@ -1080,11 +1102,21 @@ func (store *apiKeyStore) applyRemoteState(raw []byte, revision uint64) (string,
 			if lck.LastUsed.After(rck.LastUsed) {
 				rck.LastUsed = lck.LastUsed
 			}
+			if lck.InputTokens > rck.InputTokens {
+				rck.InputTokens = lck.InputTokens
+			}
+			if lck.OutputTokens > rck.OutputTokens {
+				rck.OutputTokens = lck.OutputTokens
+			}
+			if lck.UsageDay != "" && lck.UsageDay == rck.UsageDay && lck.DailyRequests > rck.DailyRequests {
+				rck.DailyRequests = lck.DailyRequests
+			}
 		}
 	}
 
 	store.adminPasswords = file.AdminPasswords
 	store.savedAdminSessions = file.AdminSessions
+	store.adminUsers = file.AdminUsers
 	store.keys = file.Keys
 	store.providers = file.Providers
 	store.proxies = file.Proxies
@@ -1127,6 +1159,10 @@ func (store *apiKeyStore) saveSelectionMode(mode string) error {
 }
 
 func (store *apiKeyStore) createClientKey(name string) (clientKeyView, string, error) {
+	return store.createClientKeyWithLimit(name, 0)
+}
+
+func (store *apiKeyStore) createClientKeyWithLimit(name string, dailyLimit int) (clientKeyView, string, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := store.ready(); err != nil {
@@ -1135,6 +1171,9 @@ func (store *apiKeyStore) createClientKey(name string) (clientKeyView, string, e
 	name = strings.TrimSpace(name)
 	if name == "" || len(name) > 80 {
 		return clientKeyView{}, "", errors.New("name must contain 1 to 80 characters")
+	}
+	if dailyLimit < 0 || dailyLimit > 10_000_000 {
+		return clientKeyView{}, "", errors.New("daily_request_limit must be between 0 and 10000000")
 	}
 	for _, existing := range store.clientKeys {
 		if strings.EqualFold(existing.Name, name) {
@@ -1154,6 +1193,7 @@ func (store *apiKeyStore) createClientKey(name string) (clientKeyView, string, e
 	record := persistedClientKey{
 		ID: "client_" + randomKeyID()[4:], Name: name, Enabled: true, Mask: maskAPIKey(plain),
 		Nonce: nonce, Ciphertext: ciphertext, CreatedAt: now, UpdatedAt: now,
+		DailyRequestLimit: dailyLimit, UsageDay: now.Format("2006-01-02"),
 		digest: sha256.Sum256([]byte(plain)), hasDigest: true,
 	}
 	store.clientKeys = append(store.clientKeys, record)
@@ -1161,7 +1201,7 @@ func (store *apiKeyStore) createClientKey(name string) (clientKeyView, string, e
 		store.clientKeys = store.clientKeys[:len(store.clientKeys)-1]
 		return clientKeyView{}, "", err
 	}
-	return clientKeyViewOf(record), plain, nil
+	return clientKeyViewOf(record, now), plain, nil
 }
 
 func (store *apiKeyStore) listClientKeys() ([]clientKeyView, error) {
@@ -1170,9 +1210,10 @@ func (store *apiKeyStore) listClientKeys() ([]clientKeyView, error) {
 	if store.loadErr != nil {
 		return nil, store.loadErr
 	}
+	now := time.Now().UTC()
 	result := make([]clientKeyView, 0, len(store.clientKeys))
 	for _, record := range store.clientKeys {
-		result = append(result, clientKeyViewOf(record))
+		result = append(result, clientKeyViewOf(record, now))
 	}
 	return result, nil
 }
@@ -1188,8 +1229,15 @@ func (store *apiKeyStore) revealClientKey(id string) (string, error) {
 }
 
 func (store *apiKeyStore) updateClientKey(id string, enabled *bool, name *string) (clientKeyView, error) {
+	return store.updateClientKeyWithLimit(id, enabled, name, nil)
+}
+
+func (store *apiKeyStore) updateClientKeyWithLimit(id string, enabled *bool, name *string, dailyLimit *int) (clientKeyView, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if err := store.ready(); err != nil {
+		return clientKeyView{}, err
+	}
 	index := store.clientKeyIndexLocked(id)
 	if index < 0 {
 		return clientKeyView{}, os.ErrNotExist
@@ -1201,21 +1249,39 @@ func (store *apiKeyStore) updateClientKey(id string, enabled *bool, name *string
 	if name != nil {
 		trimmed := strings.TrimSpace(*name)
 		if trimmed == "" || len(trimmed) > 80 {
+			store.clientKeys[index] = old
 			return clientKeyView{}, errors.New("name must contain 1 to 80 characters")
+		}
+		for i, existing := range store.clientKeys {
+			if i != index && strings.EqualFold(existing.Name, trimmed) {
+				store.clientKeys[index] = old
+				return clientKeyView{}, errors.New("a client key with this name already exists")
+			}
 		}
 		store.clientKeys[index].Name = trimmed
 	}
-	store.clientKeys[index].UpdatedAt = time.Now().UTC()
+	if dailyLimit != nil {
+		if *dailyLimit < 0 || *dailyLimit > 10_000_000 {
+			store.clientKeys[index] = old
+			return clientKeyView{}, errors.New("daily_request_limit must be between 0 and 10000000")
+		}
+		store.clientKeys[index].DailyRequestLimit = *dailyLimit
+	}
+	now := time.Now().UTC()
+	store.clientKeys[index].UpdatedAt = now
 	if err := store.saveLocked(); err != nil {
 		store.clientKeys[index] = old
 		return clientKeyView{}, err
 	}
-	return clientKeyViewOf(store.clientKeys[index]), nil
+	return clientKeyViewOf(store.clientKeys[index], now), nil
 }
 
 func (store *apiKeyStore) deleteClientKey(id string) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if err := store.ready(); err != nil {
+		return err
+	}
 	index := store.clientKeyIndexLocked(id)
 	if index < 0 {
 		return os.ErrNotExist
@@ -1230,8 +1296,16 @@ func (store *apiKeyStore) deleteClientKey(id string) error {
 }
 
 func (store *apiKeyStore) authenticateClientKey(plain string) (string, bool) {
-	if plain == "" {
+	res := store.authenticateClientKeyDetailed(plain)
+	if !res.Authenticated || res.RateLimited {
 		return "", false
+	}
+	return res.ID, true
+}
+
+func (store *apiKeyStore) authenticateClientKeyDetailed(plain string) clientAuthResult {
+	if plain == "" {
+		return clientAuthResult{}
 	}
 	providedDigest := sha256.Sum256([]byte(plain))
 	store.mu.Lock()
@@ -1255,17 +1329,38 @@ func (store *apiKeyStore) authenticateClientKey(plain string) (string, bool) {
 		}
 	}
 	if matched < 0 {
-		return "", false
+		return clientAuthResult{}
 	}
 	record := &store.clientKeys[matched]
-	prevLastUsed := record.LastUsed
 	now := time.Now().UTC()
-	record.Uses++
-	record.LastUsed = now
-	if prevLastUsed.IsZero() || now.Sub(prevLastUsed) >= 5*time.Second {
-		_ = store.saveLocked()
+	day := now.Format("2006-01-02")
+	if record.UsageDay != day {
+		record.UsageDay = day
+		record.DailyRequests = 0
 	}
-	return record.ID, true
+	if record.DailyRequestLimit > 0 && record.DailyRequests >= record.DailyRequestLimit {
+		return clientAuthResult{ID: record.ID, Name: record.Name, Authenticated: true, RateLimited: true}
+	}
+	record.Uses++
+	record.DailyRequests++
+	record.LastUsed = now
+	_ = store.saveTelemetryLocked(now)
+	return clientAuthResult{ID: record.ID, Name: record.Name, Authenticated: true}
+}
+
+func (store *apiKeyStore) recordClientUsage(id string, inputTokens, outputTokens uint64) {
+	if id == "" || (inputTokens == 0 && outputTokens == 0) {
+		return
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	index := store.clientKeyIndexLocked(id)
+	if index < 0 {
+		return
+	}
+	store.clientKeys[index].InputTokens += inputTokens
+	store.clientKeys[index].OutputTokens += outputTokens
+	_ = store.saveTelemetryLocked(time.Now().UTC())
 }
 
 func (store *apiKeyStore) hasEnabledClientKeys() bool {
@@ -1288,8 +1383,17 @@ func (store *apiKeyStore) clientKeyIndexLocked(id string) int {
 	return -1
 }
 
-func clientKeyViewOf(record persistedClientKey) clientKeyView {
-	view := clientKeyView{ID: record.ID, Name: record.Name, Enabled: record.Enabled, Mask: record.Mask, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, Uses: record.Uses}
+func clientKeyViewOf(record persistedClientKey, now time.Time) clientKeyView {
+	dailyReq := record.DailyRequests
+	if record.UsageDay != now.Format("2006-01-02") {
+		dailyReq = 0
+	}
+	view := clientKeyView{
+		ID: record.ID, Name: record.Name, Enabled: record.Enabled, Mask: record.Mask,
+		CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, Uses: record.Uses,
+		InputTokens: record.InputTokens, OutputTokens: record.OutputTokens,
+		DailyRequestLimit: record.DailyRequestLimit, DailyRequests: dailyReq,
+	}
 	if !record.LastUsed.IsZero() {
 		lastUsed := record.LastUsed
 		view.LastUsed = &lastUsed
@@ -1313,6 +1417,10 @@ func (store *apiKeyStore) keyViewLocked(record persistedAPIKey) apiKeyView {
 	view.ProviderID = record.ProviderID
 	if i := store.providerIndexLocked(record.ProviderID); i >= 0 {
 		view.ProviderName = store.providers[i].Name
+		prefixes := store.effectiveProviderPrefixesLocked()
+		if i < len(prefixes) {
+			view.ProviderPrefix = prefixes[i]
+		}
 	}
 	view.NetworkBlocked = !store.proxyAvailableLocked(record)
 	return view

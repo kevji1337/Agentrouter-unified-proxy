@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -38,6 +39,61 @@ type savedAdminSession struct {
 	Expires         time.Time `json:"expires"`
 }
 
+type persistedAdminUser struct {
+	Name      string    `json:"name"`
+	Role      string    `json:"role"`
+	Enabled   bool      `json:"enabled"`
+	Salt      string    `json:"salt"`
+	Hash      string    `json:"hash"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type adminUserView struct {
+	Name        string     `json:"name"`
+	Role        string     `json:"role"`
+	Enabled     bool       `json:"enabled"`
+	Source      string     `json:"source"`
+	HasTOTP     bool       `json:"has_totp"`
+	PasswordSet bool       `json:"password_set"`
+	CreatedAt   *time.Time `json:"created_at,omitempty"`
+	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
+}
+
+func validateAdminUserName(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if len(name) < 2 || len(name) > 64 {
+		return "", errors.New("account name must contain 2 to 64 characters")
+	}
+	for i := 0; i < len(name); i++ {
+		ch := name[i]
+		valid := (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.' || ch == '@'
+		if !valid {
+			return "", errors.New("account name may contain only letters, digits, '.', '_', '-', or '@'")
+		}
+	}
+	return name, nil
+}
+
+func hashAdminPassword(password string) (string, string, error) {
+	if len(password) < 12 || len(password) > 1024 {
+		return "", "", errors.New("password must contain 12 to 1024 bytes")
+	}
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return "", "", err
+	}
+	if !acquirePasswordWork(2 * time.Second) {
+		return "", "", errors.New("password service busy; retry shortly")
+	}
+	hash, err := pbkdf2.Key(sha256.New, password, salt, adminPasswordIterations, 32)
+	<-adminPasswordWork
+	if err != nil {
+		return "", "", err
+	}
+	return base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(hash), nil
+}
+
 type loginAttemptWindow struct {
 	Started  time.Time
 	Attempts int
@@ -54,15 +110,31 @@ func sessionHash(id string) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func (store *apiKeyStore) adminPassword(account *adminAccount) (savedAdminPassword, bool) {
-	store.mu.Lock()
-	defer store.mu.Unlock()
+func (store *apiKeyStore) passwordVersionLocked(name, fingerprint string) (savedAdminPassword, bool) {
 	for _, p := range store.adminPasswords {
-		if p.Name == account.Name && p.Fingerprint == adminFingerprint(account) {
+		if p.Name == name && p.Fingerprint == fingerprint {
 			return p, true
 		}
 	}
+	for _, u := range store.adminUsers {
+		if !u.Enabled || u.Name != name {
+			continue
+		}
+		acc := adminAccount{Name: u.Name, Role: u.Role}
+		if adminFingerprint(&acc) == fingerprint {
+			return savedAdminPassword{Name: u.Name, Fingerprint: fingerprint, Salt: u.Salt, Hash: u.Hash}, true
+		}
+	}
 	return savedAdminPassword{}, false
+}
+
+func (store *apiKeyStore) adminPassword(account *adminAccount) (savedAdminPassword, bool) {
+	if account == nil {
+		return savedAdminPassword{}, false
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.passwordVersionLocked(account.Name, adminFingerprint(account))
 }
 
 func acquirePasswordWork(timeout time.Duration) bool {
@@ -102,54 +174,234 @@ func passwordMatches(password string, record savedAdminPassword) bool {
 }
 
 func (store *apiKeyStore) setAdminPassword(account *adminAccount, password string) error {
-	if len(password) < 12 || len(password) > 1024 {
-		return errors.New("password must contain 12 to 1024 bytes")
-	}
-	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
-		return err
-	}
-	if !acquirePasswordWork(2 * time.Second) {
-		return errors.New("password service busy; retry shortly")
-	}
-	hash, err := pbkdf2.Key(sha256.New, password, salt, adminPasswordIterations, 32)
-	<-adminPasswordWork
+	saltStr, hashStr, err := hashAdminPassword(password)
 	if err != nil {
 		return err
 	}
-	record := savedAdminPassword{Name: account.Name, Fingerprint: adminFingerprint(account), Salt: base64.RawStdEncoding.EncodeToString(salt), Hash: base64.RawStdEncoding.EncodeToString(hash)}
+	record := savedAdminPassword{Name: account.Name, Fingerprint: adminFingerprint(account), Salt: saltStr, Hash: hashStr}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := store.ready(); err != nil {
 		return err
 	}
 	old := append([]savedAdminPassword(nil), store.adminPasswords...)
+	oldUsers := append([]persistedAdminUser(nil), store.adminUsers...)
 	oldSessions := append([]savedAdminSession(nil), store.savedAdminSessions...)
-	found := false
-	for i, p := range store.adminPasswords {
-		if p.Name == account.Name {
-			store.adminPasswords[i] = record
-			found = true
-			break
+	updatedUIUser := false
+	if account.Token == "" {
+		for i := range store.adminUsers {
+			if store.adminUsers[i].Name == account.Name {
+				store.adminUsers[i].Salt = saltStr
+				store.adminUsers[i].Hash = hashStr
+				store.adminUsers[i].UpdatedAt = time.Now().UTC()
+				updatedUIUser = true
+				break
+			}
 		}
 	}
-	if !found {
-		store.adminPasswords = append(store.adminPasswords, record)
+	if !updatedUIUser {
+		found := false
+		for i, p := range store.adminPasswords {
+			if p.Name == account.Name {
+				store.adminPasswords[i] = record
+				found = true
+				break
+			}
+		}
+		if !found {
+			store.adminPasswords = append(store.adminPasswords, record)
+		}
 	}
 	// Password changes revoke remembered sessions for this account.
 	retained := make([]savedAdminSession, 0, len(store.savedAdminSessions))
 	for _, s := range store.savedAdminSessions {
-		if s.Name != account.Name {
+		if !strings.EqualFold(s.Name, account.Name) {
 			retained = append(retained, s)
 		}
 	}
 	store.savedAdminSessions = retained
 	if err := store.saveLocked(); err != nil {
 		store.adminPasswords = old
+		store.adminUsers = oldUsers
 		store.savedAdminSessions = oldSessions
 		return err
 	}
 	return nil
+}
+
+func (store *apiKeyStore) enabledAdminAccounts() []adminAccount {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	out := make([]adminAccount, 0, len(store.adminUsers))
+	for _, u := range store.adminUsers {
+		if u.Enabled {
+			out = append(out, adminAccount{Name: u.Name, Role: u.Role})
+		}
+	}
+	return out
+}
+
+func (store *apiKeyStore) listAdminUsers() []persistedAdminUser {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	out := make([]persistedAdminUser, len(store.adminUsers))
+	copy(out, store.adminUsers)
+	return out
+}
+
+func (store *apiKeyStore) createAdminUser(name, role, password string, enabled bool, reservedNames map[string]bool) (adminUserView, error) {
+	cleanName, err := validateAdminUserName(name)
+	if err != nil {
+		return adminUserView{}, err
+	}
+	role = strings.ToLower(strings.TrimSpace(role))
+	if role != "admin" && role != "viewer" {
+		return adminUserView{}, errors.New("role must be admin or viewer")
+	}
+	if reservedNames[strings.ToLower(cleanName)] {
+		return adminUserView{}, errors.New("an account with this name already exists in environment configuration")
+	}
+	saltStr, hashStr, err := hashAdminPassword(password)
+	if err != nil {
+		return adminUserView{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ready(); err != nil {
+		return adminUserView{}, err
+	}
+	for _, existing := range store.adminUsers {
+		if strings.EqualFold(existing.Name, cleanName) {
+			return adminUserView{}, errors.New("an account with this name already exists")
+		}
+	}
+	now := time.Now().UTC()
+	record := persistedAdminUser{
+		Name: cleanName, Role: role, Enabled: enabled,
+		Salt: saltStr, Hash: hashStr, CreatedAt: now, UpdatedAt: now,
+	}
+	old := append([]persistedAdminUser(nil), store.adminUsers...)
+	store.adminUsers = append(store.adminUsers, record)
+	if err := store.saveLocked(); err != nil {
+		store.adminUsers = old
+		return adminUserView{}, err
+	}
+	return adminUserViewOf(record), nil
+}
+
+func (store *apiKeyStore) updateAdminUser(name string, role *string, enabled *bool, password *string) (adminUserView, error) {
+	var saltStr, hashStr string
+	if password != nil && *password != "" {
+		var err error
+		saltStr, hashStr, err = hashAdminPassword(*password)
+		if err != nil {
+			return adminUserView{}, err
+		}
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ready(); err != nil {
+		return adminUserView{}, err
+	}
+	idx := -1
+	for i := range store.adminUsers {
+		if strings.EqualFold(store.adminUsers[i].Name, strings.TrimSpace(name)) {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return adminUserView{}, os.ErrNotExist
+	}
+	oldUsers := append([]persistedAdminUser(nil), store.adminUsers...)
+	oldSessions := append([]savedAdminSession(nil), store.savedAdminSessions...)
+	updated := store.adminUsers[idx]
+	revokeSessions := false
+	if role != nil {
+		r := strings.ToLower(strings.TrimSpace(*role))
+		if r != "admin" && r != "viewer" {
+			return adminUserView{}, errors.New("role must be admin or viewer")
+		}
+		if updated.Role != r {
+			updated.Role = r
+			revokeSessions = true
+		}
+	}
+	if enabled != nil {
+		if updated.Enabled != *enabled {
+			updated.Enabled = *enabled
+			if !updated.Enabled {
+				revokeSessions = true
+			}
+		}
+	}
+	if hashStr != "" {
+		updated.Salt = saltStr
+		updated.Hash = hashStr
+		revokeSessions = true
+	}
+	updated.UpdatedAt = time.Now().UTC()
+	store.adminUsers[idx] = updated
+	if revokeSessions {
+		kept := make([]savedAdminSession, 0, len(store.savedAdminSessions))
+		for _, s := range store.savedAdminSessions {
+			if !strings.EqualFold(s.Name, updated.Name) {
+				kept = append(kept, s)
+			}
+		}
+		store.savedAdminSessions = kept
+	}
+	if err := store.saveLocked(); err != nil {
+		store.adminUsers = oldUsers
+		store.savedAdminSessions = oldSessions
+		return adminUserView{}, err
+	}
+	return adminUserViewOf(updated), nil
+}
+
+func (store *apiKeyStore) deleteAdminUser(name string) (string, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ready(); err != nil {
+		return "", err
+	}
+	idx := -1
+	for i := range store.adminUsers {
+		if strings.EqualFold(store.adminUsers[i].Name, strings.TrimSpace(name)) {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return "", os.ErrNotExist
+	}
+	actualName := store.adminUsers[idx].Name
+	oldUsers := append([]persistedAdminUser(nil), store.adminUsers...)
+	oldSessions := append([]savedAdminSession(nil), store.savedAdminSessions...)
+	store.adminUsers = append(store.adminUsers[:idx], store.adminUsers[idx+1:]...)
+	kept := make([]savedAdminSession, 0, len(store.savedAdminSessions))
+	for _, s := range store.savedAdminSessions {
+		if !strings.EqualFold(s.Name, actualName) {
+			kept = append(kept, s)
+		}
+	}
+	store.savedAdminSessions = kept
+	if err := store.saveLocked(); err != nil {
+		store.adminUsers = oldUsers
+		store.savedAdminSessions = oldSessions
+		return "", err
+	}
+	return actualName, nil
+}
+
+func adminUserViewOf(u persistedAdminUser) adminUserView {
+	created := u.CreatedAt
+	updated := u.UpdatedAt
+	return adminUserView{
+		Name: u.Name, Role: u.Role, Enabled: u.Enabled,
+		Source: "ui", HasTOTP: false, PasswordSet: true,
+		CreatedAt: &created, UpdatedAt: &updated,
+	}
 }
 
 func (store *apiKeyStore) saveBrowserSession(account *adminAccount, remember bool) (string, time.Time, error) {
@@ -178,14 +430,12 @@ func (store *apiKeyStore) saveBrowserSession(account *adminAccount, remember boo
 	if len(sessions) >= maxSavedAdminSessions {
 		sessions = sessions[len(sessions)-maxSavedAdminSessions+1:]
 	}
+	fp := adminFingerprint(account)
 	version := ""
-	for _, p := range store.adminPasswords {
-		if p.Name == account.Name && p.Fingerprint == adminFingerprint(account) {
-			version = p.Hash
-			break
-		}
+	if p, ok := store.passwordVersionLocked(account.Name, fp); ok {
+		version = p.Hash
 	}
-	store.savedAdminSessions = append(sessions, savedAdminSession{PasswordVersion: version, Hash: sessionHash(id), Name: account.Name, Fingerprint: adminFingerprint(account), Expires: expires})
+	store.savedAdminSessions = append(sessions, savedAdminSession{PasswordVersion: version, Hash: sessionHash(id), Name: account.Name, Fingerprint: fp, Expires: expires})
 	if err := store.saveLocked(); err != nil {
 		store.savedAdminSessions = old
 		return "", time.Time{}, err
@@ -207,11 +457,8 @@ func (store *apiKeyStore) browserSessionAccount(id string, accounts []adminAccou
 		for i := range accounts {
 			if accounts[i].Name == s.Name && adminFingerprint(&accounts[i]) == s.Fingerprint {
 				version := ""
-				for _, p := range store.adminPasswords {
-					if p.Name == s.Name && p.Fingerprint == s.Fingerprint {
-						version = p.Hash
-						break
-					}
+				if p, ok := store.passwordVersionLocked(s.Name, s.Fingerprint); ok {
+					version = p.Hash
 				}
 				if version != s.PasswordVersion {
 					return nil
@@ -259,6 +506,16 @@ func validateAdminAccessFile(file persistedKeyFile) error {
 		if len(s.Hash) != 64 || len(s.Fingerprint) != 64 || s.Name == "" || s.Expires.IsZero() {
 			return errors.New("invalid saved admin session")
 		}
+	}
+	uiNames := make(map[string]bool, len(file.AdminUsers))
+	for _, u := range file.AdminUsers {
+		cleanName, nameErr := validateAdminUserName(u.Name)
+		salt, e1 := base64.RawStdEncoding.DecodeString(u.Salt)
+		hash, e2 := base64.RawStdEncoding.DecodeString(u.Hash)
+		if nameErr != nil || uiNames[strings.ToLower(cleanName)] || (u.Role != "admin" && u.Role != "viewer") || e1 != nil || e2 != nil || len(salt) != 16 || len(hash) != 32 {
+			return errors.New("invalid saved admin user")
+		}
+		uiNames[strings.ToLower(cleanName)] = true
 	}
 	return nil
 }

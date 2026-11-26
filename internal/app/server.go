@@ -835,7 +835,7 @@ func (server *proxyServer) authenticate(next http.Handler) http.Handler {
 		provided := r.Header.Get("X-Proxy-Token")
 		staticValid := server.cfg.ProxyAuthToken != "" && len(provided) == len(server.cfg.ProxyAuthToken) &&
 			subtle.ConstantTimeCompare([]byte(provided), []byte(server.cfg.ProxyAuthToken)) == 1
-		clientValid := false
+		var clientRes clientAuthResult
 		bearer := ""
 		if authorization := r.Header.Get("Authorization"); strings.HasPrefix(strings.ToLower(authorization), "bearer ") {
 			bearer = strings.TrimSpace(authorization[7:])
@@ -844,12 +844,23 @@ func (server *proxyServer) authenticate(next http.Handler) http.Handler {
 		}
 		if bearer != "" {
 			if hasClientKeys {
-				_, clientValid = server.keys.authenticateClientKey(bearer)
+				clientRes = server.keys.authenticateClientKeyDetailed(bearer)
 			}
-			if !clientValid && server.syncStateIfBehind(r.Context()) && server.keys.hasEnabledClientKeys() {
-				_, clientValid = server.keys.authenticateClientKey(bearer)
+			if !clientRes.Authenticated && server.syncStateIfBehind(r.Context()) && server.keys.hasEnabledClientKeys() {
+				clientRes = server.keys.authenticateClientKeyDetailed(bearer)
 			}
 		}
+		if clientRes.Authenticated && clientRes.RateLimited && !staticValid {
+			requestLogFromContext(r.Context()).set(map[string]any{"client_id": clientRes.ID, "client_name": clientRes.Name, "error_code": "client_daily_limit_exceeded"})
+			w.Header().Set("Retry-After", "60")
+			if strings.HasPrefix(r.URL.Path, "/v1/messages") {
+				writeAnthropicError(w, http.StatusTooManyRequests, "rate_limit_error", "daily request limit exceeded for this proxy client key")
+				return
+			}
+			writeError(w, http.StatusTooManyRequests, "client_daily_limit_exceeded", "daily request limit exceeded for this proxy client key")
+			return
+		}
+		clientValid := clientRes.Authenticated && !clientRes.RateLimited
 		if !staticValid && !clientValid {
 			if strings.HasPrefix(r.URL.Path, "/v1/messages") {
 				writeAnthropicError(w, http.StatusUnauthorized, "authentication_error", "missing or invalid proxy client API key")
@@ -859,11 +870,14 @@ func (server *proxyServer) authenticate(next http.Handler) http.Handler {
 			return
 		}
 		if clientValid {
+			requestLogFromContext(r.Context()).set(map[string]any{"client_id": clientRes.ID, "client_name": clientRes.Name})
 			clone := r.Clone(r.Context())
 			clone.Header = r.Header.Clone()
 			clone.Header.Del("Authorization") // never forward proxy client credentials upstream
 			clone.Header.Del("X-Api-Key")
-			clone = clone.WithContext(context.WithValue(clone.Context(), gatewayClientContextKey{}, true))
+			ctx := context.WithValue(clone.Context(), gatewayClientContextKey{}, true)
+			ctx = context.WithValue(ctx, gatewayClientInfoContextKey{}, gatewayClientInfo{ID: clientRes.ID, Name: clientRes.Name})
+			clone = clone.WithContext(ctx)
 			r = clone
 		}
 		next.ServeHTTP(w, r)
@@ -976,6 +990,15 @@ func (server *proxyServer) handleModels(w http.ResponseWriter, r *http.Request) 
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")
 		return
+	}
+	if r.URL.Query().Get("upstream") != "1" {
+		if catalog := server.keys.prefixedModelCatalog(); len(catalog) > 0 {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"object": "list",
+				"data":   catalog,
+			})
+			return
+		}
 	}
 	resp, err := server.doUpstream(r.Context(), r.Header, http.MethodGet, "/v1/models", nil, false)
 	if err != nil {
@@ -1277,6 +1300,33 @@ type prefixedResponseBody struct {
 func (body *prefixedResponseBody) Close() error { return body.closer.Close() }
 
 type gatewayClientContextKey struct{}
+type gatewayClientInfoContextKey struct{}
+
+type gatewayClientInfo struct {
+	ID   string
+	Name string
+}
+
+func gatewayClientFromContext(ctx context.Context) gatewayClientInfo {
+	info, _ := ctx.Value(gatewayClientInfoContextKey{}).(gatewayClientInfo)
+	return info
+}
+
+func rewriteRequestBodyModel(body []byte, upstreamModel string) ([]byte, error) {
+	if len(body) == 0 || upstreamModel == "" {
+		return body, nil
+	}
+	obj, err := decodeObject(body)
+	if err != nil {
+		return nil, err
+	}
+	current, ok := obj["model"].(string)
+	if !ok || current == upstreamModel {
+		return body, nil
+	}
+	obj["model"] = upstreamModel
+	return json.Marshal(obj)
+}
 
 func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, method, path string, body []byte, stream bool) (*http.Response, error) {
 	resp, _, err := server.doUpstreamWithMeta(ctx, inbound, method, path, body, stream)
@@ -1285,19 +1335,35 @@ func (server *proxyServer) doUpstream(ctx context.Context, inbound http.Header, 
 
 func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.Header, method, path string, body []byte, stream bool) (response *http.Response, responseMeta *requestMeta, resultErr error) {
 	record := requestLogFromContext(ctx)
-	record.set(map[string]any{"model": modelFromRequestBody(body), "stream": stream})
+	model := modelFromRequestBody(body)
+	_, upstreamModel, matchedPrefix := server.keys.resolveModelRoute(model)
+	if upstreamModel == "" {
+		upstreamModel = model
+	}
+	logFields := map[string]any{"model": model, "stream": stream}
+	if matchedPrefix {
+		logFields["upstream_model"] = upstreamModel
+	}
+	record.set(logFields)
 	defer func() {
 		if resultErr != nil {
 			record.set(map[string]any{"error_code": requestFailureCode(resultErr)})
 		}
 	}()
+	upstreamInputBody := body
+	if matchedPrefix && len(body) > 0 {
+		rewritten, rewriteErr := rewriteRequestBodyModel(body, upstreamModel)
+		if rewriteErr != nil {
+			return nil, nil, fmt.Errorf("%w: %v", errInvalidUpstreamRequest, rewriteErr)
+		}
+		upstreamInputBody = rewritten
+	}
 	retries := 0
 	wafRetried := false
 	resourceRetried := false
 	excludedKeys := make(map[string]bool)
 	// Bound failover even if administrators add keys during this request.
 	remainingFailovers := max(0, server.keys.status().Total-1)
-	model := modelFromRequestBody(body)
 	pathOnly, _, _ := strings.Cut(path, "?")
 	requiredProtocol := pathOnly
 	inboundAuth := inbound.Get("Authorization")
@@ -1326,7 +1392,7 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 			return nil, nil, settingsErr
 		}
 		record.set(safeRouteFields(selectedKey, baseURL, protocol))
-		attemptPath, attemptBody, meta, prepareErr := server.prepareUpstream(path, body, protocol)
+		attemptPath, attemptBody, meta, prepareErr := server.prepareUpstream(path, upstreamInputBody, protocol)
 		if prepareErr != nil {
 			return nil, nil, prepareErr
 		}
@@ -1346,7 +1412,7 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 			if safePath == "/v1/models" || safePath == "/models" {
 				resp, err = server.handleGenAIModels(attemptCtx, route, baseURL, selectedKey)
 			} else {
-				resp, err = server.executeGenAI(attemptCtx, route, baseURL, selectedKey, model, attemptBody, stream)
+				resp, err = server.executeGenAI(attemptCtx, route, baseURL, selectedKey, upstreamModel, attemptBody, stream)
 			}
 		} else {
 			var requestBody io.Reader
@@ -1481,7 +1547,7 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 				}
 				if changed {
 					if path == "/v1/responses" {
-						body = sanitized
+						upstreamInputBody = sanitized
 					}
 					resourceRetried = true
 					server.metrics.retries.Add(1)
@@ -1535,17 +1601,28 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 			}
 			continue
 		}
+		clientInfo := gatewayClientFromContext(ctx)
 		if selectedKey != nil {
 			server.keys.recordResult(selectedKey.ID, resp.StatusCode, http.StatusText(resp.StatusCode), server.cfg.KeyCooldown)
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				keyID := selectedKey.ID
+				clientID := clientInfo.ID
 				release := server.infra.acquireKey(ctx, keyID)
 				resp.Body = newUsageTrackingBodyWithFallback(resp.Body, oobUsage, func(input, output uint64) {
 					server.keys.recordUsage(keyID, input, output)
+					if clientID != "" {
+						server.keys.recordClientUsage(clientID, input, output)
+					}
 					record.set(map[string]any{"input_tokens": input, "output_tokens": output})
 				})
 				resp.Body = newReleaseBody(resp.Body, release)
 			}
+		} else if clientInfo.ID != "" && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			clientID := clientInfo.ID
+			resp.Body = newUsageTrackingBodyWithFallback(resp.Body, oobUsage, func(input, output uint64) {
+				server.keys.recordClientUsage(clientID, input, output)
+				record.set(map[string]any{"input_tokens": input, "output_tokens": output})
+			})
 		}
 		resp.Body = &loggedResponseBody{ReadCloser: resp.Body, ctx: ctx}
 		return resp, meta, nil

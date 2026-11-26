@@ -103,6 +103,10 @@ func (server *proxyServer) handleAdminAPI(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusForbidden, "admin_role_required", "administrator role required")
 		return
 	}
+	if account.Role != "admin" && (r.URL.Path == "/api/admin/backup" || r.URL.Path == "/api/admin/accounts" || strings.HasPrefix(r.URL.Path, "/api/admin/accounts/")) {
+		writeError(w, http.StatusForbidden, "admin_role_required", "administrator role required")
+		return
+	}
 	r = r.WithContext(withAdminAccount(r.Context(), account))
 
 	switch {
@@ -110,6 +114,10 @@ func (server *proxyServer) handleAdminAPI(w http.ResponseWriter, r *http.Request
 		server.handleAdminPassword(w, r, account)
 	case r.URL.Path == "/api/admin/logout":
 		server.handleAdminLogout(w, r)
+	case r.URL.Path == "/api/admin/accounts":
+		server.handleAdminAccounts(w, r, account)
+	case strings.HasPrefix(r.URL.Path, "/api/admin/accounts/"):
+		server.handleAdminAccount(w, r, account, strings.TrimPrefix(r.URL.Path, "/api/admin/accounts/"))
 	case r.URL.Path == "/api/admin/status":
 		server.handleAdminStatus(w, r)
 	case r.URL.Path == "/api/admin/settings":
@@ -150,6 +158,125 @@ func (server *proxyServer) handleAdminAPI(w http.ResponseWriter, r *http.Request
 	}
 }
 
+func (server *proxyServer) handleAdminAccounts(w http.ResponseWriter, r *http.Request, actor *adminAccount) {
+	switch r.Method {
+	case http.MethodGet:
+		envNames := make(map[string]bool, len(server.cfg.AdminAccounts))
+		views := make([]adminUserView, 0, len(server.cfg.AdminAccounts)+4)
+		for i := range server.cfg.AdminAccounts {
+			acc := &server.cfg.AdminAccounts[i]
+			_, pwSet := server.keys.adminPassword(acc)
+			views = append(views, adminUserView{
+				Name: acc.Name, Role: acc.Role, Enabled: true,
+				Source: "env", HasTOTP: acc.TOTPSecret != "", PasswordSet: pwSet,
+			})
+			envNames[strings.ToLower(acc.Name)] = true
+		}
+		for _, u := range server.keys.listAdminUsers() {
+			if !envNames[strings.ToLower(u.Name)] {
+				views = append(views, adminUserViewOf(u))
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": views})
+	case http.MethodPost:
+		var input struct {
+			Name     string `json:"name"`
+			Password string `json:"password"`
+			Role     string `json:"role"`
+			Enabled  *bool  `json:"enabled"`
+		}
+		if err := decodeAdminJSON(w, r, &input); err != nil {
+			return
+		}
+		enabled := true
+		if input.Enabled != nil {
+			enabled = *input.Enabled
+		}
+		if input.Role == "" {
+			input.Role = "viewer"
+		}
+		reserved := make(map[string]bool, len(server.cfg.AdminAccounts))
+		for _, acc := range server.cfg.AdminAccounts {
+			reserved[strings.ToLower(acc.Name)] = true
+		}
+		view, err := server.keys.createAdminUser(input.Name, input.Role, input.Password, enabled, reserved)
+		if err != nil {
+			writeAdminStoreError(w, err)
+			return
+		}
+		logEvent("info", "admin_account_created", map[string]any{"name": view.Name, "role": view.Role, "admin": actor.Name})
+		writeJSON(w, http.StatusCreated, view)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET or POST")
+	}
+}
+
+func (server *proxyServer) handleAdminAccount(w http.ResponseWriter, r *http.Request, actor *adminAccount, rawName string) {
+	targetName := strings.TrimSpace(strings.Trim(rawName, "/"))
+	if targetName == "" || strings.Contains(targetName, "/") {
+		writeError(w, http.StatusNotFound, "not_found", "account not found")
+		return
+	}
+	for _, envAcc := range server.cfg.AdminAccounts {
+		if strings.EqualFold(envAcc.Name, targetName) {
+			writeError(w, http.StatusBadRequest, "env_account_immutable", "accounts configured via environment variables cannot be modified or deleted in UI")
+			return
+		}
+	}
+	switch r.Method {
+	case http.MethodPatch:
+		var input struct {
+			Role     *string `json:"role"`
+			Enabled  *bool   `json:"enabled"`
+			Password *string `json:"password"`
+		}
+		if err := decodeAdminJSON(w, r, &input); err != nil {
+			return
+		}
+		if actor != nil && strings.EqualFold(actor.Name, targetName) {
+			if input.Enabled != nil && !*input.Enabled {
+				writeError(w, http.StatusBadRequest, "cannot_disable_self", "you cannot disable your own active administrator account")
+				return
+			}
+			if input.Role != nil && strings.ToLower(strings.TrimSpace(*input.Role)) != "admin" {
+				writeError(w, http.StatusBadRequest, "cannot_demote_self", "you cannot remove admin role from your own active account")
+				return
+			}
+		}
+		view, err := server.keys.updateAdminUser(targetName, input.Role, input.Enabled, input.Password)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				writeError(w, http.StatusNotFound, "account_not_found", "account not found")
+				return
+			}
+			writeAdminStoreError(w, err)
+			return
+		}
+		server.revokeInMemorySessionsForUser(view.Name)
+		logEvent("info", "admin_account_updated", map[string]any{"name": view.Name, "role": view.Role, "enabled": view.Enabled, "admin": actor.Name})
+		writeJSON(w, http.StatusOK, view)
+	case http.MethodDelete:
+		if actor != nil && strings.EqualFold(actor.Name, targetName) {
+			writeError(w, http.StatusBadRequest, "cannot_delete_self", "you cannot delete your own active administrator account")
+			return
+		}
+		deletedName, err := server.keys.deleteAdminUser(targetName)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				writeError(w, http.StatusNotFound, "account_not_found", "account not found")
+				return
+			}
+			writeAdminStoreError(w, err)
+			return
+		}
+		server.revokeInMemorySessionsForUser(deletedName)
+		logEvent("info", "admin_account_deleted", map[string]any{"name": deletedName, "admin": actor.Name})
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use PATCH or DELETE")
+	}
+}
+
 func (server *proxyServer) handleAdminClientKeys(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -161,12 +288,13 @@ func (server *proxyServer) handleAdminClientKeys(w http.ResponseWriter, r *http.
 		writeJSON(w, http.StatusOK, map[string]any{"data": keys})
 	case http.MethodPost:
 		var input struct {
-			Name string `json:"name"`
+			Name              string `json:"name"`
+			DailyRequestLimit int    `json:"daily_request_limit"`
 		}
 		if err := decodeAdminJSON(w, r, &input); err != nil {
 			return
 		}
-		view, plain, err := server.keys.createClientKey(input.Name)
+		view, plain, err := server.keys.createClientKeyWithLimit(input.Name, input.DailyRequestLimit)
 		if err != nil {
 			writeAdminStoreError(w, err)
 			return
@@ -203,13 +331,14 @@ func (server *proxyServer) handleAdminClientKey(w http.ResponseWriter, r *http.R
 	switch r.Method {
 	case http.MethodPatch:
 		var input struct {
-			Name    *string `json:"name"`
-			Enabled *bool   `json:"enabled"`
+			Name              *string `json:"name"`
+			Enabled           *bool   `json:"enabled"`
+			DailyRequestLimit *int    `json:"daily_request_limit"`
 		}
 		if err := decodeAdminJSON(w, r, &input); err != nil {
 			return
 		}
-		view, err := server.keys.updateClientKey(id, input.Enabled, input.Name)
+		view, err := server.keys.updateClientKeyWithLimit(id, input.Enabled, input.Name, input.DailyRequestLimit)
 		if err != nil {
 			writeAdminStoreError(w, err)
 			return

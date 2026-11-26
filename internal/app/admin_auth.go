@@ -62,12 +62,45 @@ func parseAdminAccounts(raw, legacyToken string) ([]adminAccount, error) {
 	return accounts, nil
 }
 
+func (server *proxyServer) effectiveAdminAccounts() []adminAccount {
+	envNames := make(map[string]bool, len(server.cfg.AdminAccounts))
+	out := make([]adminAccount, 0, len(server.cfg.AdminAccounts)+4)
+	for _, acc := range server.cfg.AdminAccounts {
+		out = append(out, acc)
+		envNames[strings.ToLower(acc.Name)] = true
+	}
+	if server.keys != nil {
+		for _, acc := range server.keys.enabledAdminAccounts() {
+			if !envNames[strings.ToLower(acc.Name)] {
+				out = append(out, acc)
+			}
+		}
+	}
+	return out
+}
+
+func (server *proxyServer) revokeInMemorySessionsForUser(name string) {
+	server.adminMu.Lock()
+	var evicted []string
+	for id, sess := range server.adminSessions {
+		if strings.EqualFold(sess.Account.Name, name) {
+			delete(server.adminSessions, id)
+			evicted = append(evicted, id)
+		}
+	}
+	server.adminMu.Unlock()
+	for _, id := range evicted {
+		server.infra.deleteAdminSession(context.Background(), id)
+	}
+}
+
 func (server *proxyServer) accountForSession(session adminSession) *adminAccount {
 	if !time.Now().Before(session.Expires) {
 		return nil
 	}
-	for i := range server.cfg.AdminAccounts {
-		account := &server.cfg.AdminAccounts[i]
+	accounts := server.effectiveAdminAccounts()
+	for i := range accounts {
+		account := &accounts[i]
 		if session.Account.Name != account.Name || adminFingerprint(&session.Account) != adminFingerprint(account) {
 			continue
 		}
@@ -101,9 +134,9 @@ func (server *proxyServer) authenticateAdmin(r *http.Request) (*adminAccount, er
 		}
 	}
 	if cookie, err := r.Cookie(adminSessionCookie); err == nil {
-		account := server.keys.browserSessionAccount(cookie.Value, server.cfg.AdminAccounts)
+		account := server.keys.browserSessionAccount(cookie.Value, server.effectiveAdminAccounts())
 		if account == nil && server.syncStateIfBehind(r.Context()) {
-			account = server.keys.browserSessionAccount(cookie.Value, server.cfg.AdminAccounts)
+			account = server.keys.browserSessionAccount(cookie.Value, server.effectiveAdminAccounts())
 		}
 		if account != nil {
 			if !cookieMutationAllowed(r) {
@@ -124,15 +157,17 @@ func (server *proxyServer) authenticateAdminCredentials(name, password, token, t
 				matched = account
 			}
 		}
-	} else if name != "" && password != "" {
+	} else if strings.TrimSpace(name) != "" && password != "" {
+		trimmedName := strings.TrimSpace(name)
 		record, ok := savedAdminPassword{}, false
-		for i := range server.cfg.AdminAccounts {
-			if server.cfg.AdminAccounts[i].Name != name {
+		accounts := server.effectiveAdminAccounts()
+		for i := range accounts {
+			if accounts[i].Name != trimmedName && !(accounts[i].Token == "" && strings.EqualFold(accounts[i].Name, trimmedName)) {
 				continue
 			}
-			if candidate, exists := server.keys.adminPassword(&server.cfg.AdminAccounts[i]); exists {
+			if candidate, exists := server.keys.adminPassword(&accounts[i]); exists {
 				record, ok = candidate, true
-				matched = &server.cfg.AdminAccounts[i]
+				matched = &accounts[i]
 				break
 			}
 		}
