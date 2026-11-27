@@ -4,6 +4,7 @@ services:
     image: agentrouter-unified-proxy:latest
     container_name: agentrouter-unified-proxy
     restart: unless-stopped
+    stop_grace_period: 5s
     env_file:
       - .env
     ports:
