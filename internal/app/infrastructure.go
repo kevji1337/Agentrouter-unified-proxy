@@ -487,6 +487,9 @@ func (infra *infrastructure) maybeAlert(ctx context.Context, event map[string]an
 	if infra.telegramToken == "" || infra.telegramChatID == "" {
 		return
 	}
+	if suppress, _ := event["suppress_alert"].(bool); suppress {
+		return
+	}
 	message, _ := event["message"].(string)
 	alertMessages := map[string]bool{
 		"api_key_failover": true, "waf_block_retry": true, "azure_resource_state_retry": true,
@@ -500,6 +503,9 @@ func (infra *infrastructure) maybeAlert(ctx context.Context, event map[string]an
 		return
 	}
 	text := "AgentRouter alert\nEvent: " + message
+	if model, ok := event["model"]; ok && fmt.Sprint(model) != "" {
+		text += "\nModel: " + fmt.Sprint(model)
+	}
 	if status, ok := event["status"]; ok {
 		text += "\nStatus: " + fmt.Sprint(status)
 	}

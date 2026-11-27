@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestProviderModelPrefixesDisambiguateIdenticalModelsAndStripPrefixUpstream(t *testing.T) {
@@ -233,5 +235,92 @@ func TestFriendClientKeyUsageLimitsAndUIAccountsRBAC(t *testing.T) {
 	reloaded := newAPIKeyStore(storePath, "test-encryption-secret")
 	if len(reloaded.listAdminUsers()) != 1 || reloaded.listAdminUsers()[0].Name != "kent" {
 		t.Fatalf("UI admin users not persisted across reload")
+	}
+}
+
+func TestNoAvailableAPIKeysAlertSuppressedWhenKeysDisabledButSentOnCooldown(t *testing.T) {
+	var sentTexts []string
+	tgServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		_ = json.Unmarshal(raw, &body)
+		if txt, ok := body["text"].(string); ok {
+			sentTexts = append(sentTexts, txt)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer tgServer.Close()
+
+	gateway := multiUpstreamProxy(t, "https://agentrouter.org")
+	p := createProvider(t, gateway.keys, "Google", "https://generativelanguage.googleapis.com", protocolGenAI, "gemini-4-hydrogen")
+	keyView := addProviderKey(t, gateway, "Google Disabled", "sk-google-disabled-key", p.ID, 1)
+	disabled := false
+	if _, err := gateway.keys.update(keyView.ID, nil, &disabled); err != nil {
+		t.Fatal(err)
+	}
+
+	// Capture events emitted by doUpstreamWithMeta directly into maybeAlert.
+	infra := &infrastructure{
+		telegramToken:  "test-token",
+		telegramChatID: "12345",
+		alertCooldown:  0,
+		lastAlerts:     make(map[string]time.Time),
+		httpClient:     tgServer.Client(),
+	}
+	var captured []map[string]any
+	setPersistentLogSink(func(record map[string]any) {
+		captured = append(captured, record)
+	})
+	defer setPersistentLogSink(nil)
+
+	// 1. Key is manually disabled -> must mark suppress_alert=true and NOT alert.
+	rec := requestGateway(gateway, "/v1/chat/completions", `{"model":"google/gemini-4-hydrogen","messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 for disabled key, got %d", rec.Code)
+	}
+	foundDisabled := false
+	for _, ev := range captured {
+		if ev["message"] == "no_available_api_keys" {
+			foundDisabled = true
+			if sup, _ := ev["suppress_alert"].(bool); !sup {
+				t.Fatalf("expected suppress_alert=true for disabled key, got %+v", ev)
+			}
+			// Must not send Telegram alert when suppressed.
+			infra.maybeAlert(context.Background(), ev)
+		}
+	}
+	if !foundDisabled {
+		t.Fatal("expected no_available_api_keys log event")
+	}
+	if len(sentTexts) != 0 {
+		t.Fatalf("expected 0 Telegram alerts for disabled keys, got %d: %v", len(sentTexts), sentTexts)
+	}
+
+	// 2. Enable key, then put it into cooldown -> real runtime outage -> suppress_alert must NOT be set!
+	captured = nil
+	enabled := true
+	if _, err := gateway.keys.update(keyView.ID, nil, &enabled); err != nil {
+		t.Fatal(err)
+	}
+	gateway.keys.recordResult(keyView.ID, http.StatusTooManyRequests, "Too Many Requests", 5*time.Minute)
+	if !gateway.keys.hasEnabledMatchingKey("google/gemini-4-hydrogen", "/v1/chat/completions") {
+		t.Fatal("expected hasEnabledMatchingKey=true for enabled key in cooldown")
+	}
+	rec = requestGateway(gateway, "/v1/chat/completions", `{"model":"google/gemini-4-hydrogen","messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 for cooling key, got %d", rec.Code)
+	}
+	foundCooling := false
+	for _, ev := range captured {
+		if ev["message"] == "no_available_api_keys" {
+			foundCooling = true
+			if sup, _ := ev["suppress_alert"].(bool); sup {
+				t.Fatalf("expected alert NOT suppressed for enabled key in cooldown, got %+v", ev)
+			}
+		}
+	}
+	if !foundCooling {
+		t.Fatal("expected no_available_api_keys event for enabled key in cooldown")
 	}
 }

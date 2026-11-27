@@ -546,6 +546,51 @@ func (store *apiKeyStore) hasCompatibleKey(model, protocolFilter string) bool {
 	return false
 }
 
+// hasEnabledMatchingKey reports whether at least one enabled key (on an enabled
+// provider) matches model and protocol, ignoring runtime cooldowns, daily limits,
+// and budgets. When false, keys are intentionally disabled or unconfigured.
+func (store *apiKeyStore) hasEnabledMatchingKey(model, protocolFilter string) bool {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.loadErr != nil || len(store.keys) == 0 {
+		return false
+	}
+	targetProviderID, checkModel, matchedPrefix := store.resolveModelRouteLocked(model)
+	for _, key := range store.keys {
+		if !key.Enabled {
+			continue
+		}
+		effective, providerEnabled := store.providerForKeyLocked(key)
+		if !providerEnabled {
+			continue
+		}
+		if !protocolFilterMatches(effective.APIProtocol, protocolFilter) {
+			continue
+		}
+		if matchedPrefix {
+			if key.ProviderID != targetProviderID || len(effective.Models) == 0 {
+				continue
+			}
+		} else if model != "" {
+			if store.modelManagedLocked(model) && key.ProviderID == "" {
+				continue
+			}
+			if key.ProviderID != "" && len(effective.Models) == 0 {
+				continue
+			}
+		}
+		if checkModel == "" || len(effective.Models) == 0 {
+			return true
+		}
+		for _, allowed := range effective.Models {
+			if allowed == "*" || strings.EqualFold(allowed, checkModel) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (store *apiKeyStore) hasProtocolBlockedKey(excluded map[string]bool, model, protocolFilter string) bool {
 	if protocolFilter == "" {
 		return false

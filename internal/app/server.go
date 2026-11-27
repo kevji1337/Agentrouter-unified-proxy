@@ -1382,7 +1382,11 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 	}
 	if err != nil {
 		if errors.Is(err, errNoEnabledAPIKeys) {
-			logRequestEvent(ctx, "error", "no_available_api_keys", map[string]any{"model": model})
+			if server.keys.hasEnabledMatchingKey(model, requiredProtocol) {
+				logRequestEvent(ctx, "error", "no_available_api_keys", map[string]any{"model": model})
+			} else {
+				logRequestEvent(ctx, "warn", "no_available_api_keys", map[string]any{"model": model, "reason": "keys_disabled", "suppress_alert": true})
+			}
 		}
 		return nil, nil, err
 	}
