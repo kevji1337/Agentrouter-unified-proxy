@@ -26,7 +26,7 @@ const providers = [
  {id:'provider_a', name:'Provider A', base_url:'https://api-a.example/v1', api_protocol:'chat-completions', spoof_profile:'generic', enabled:true, models:['model-a','model-shared'], keys:2},
  {id:'provider_b', name:'Provider B', base_url:'https://api-b.example/api/v1', api_protocol:'responses', spoof_profile:'generic', enabled:true, models:['model-b','model-shared'], keys:1},
 ];
-const keys = Array.from({length:25}, (_,i) => ({id:'key_'+i, name:'Key '+i, provider_id:'provider_a', provider_name:'Provider A', base_url:providers[0].base_url, api_protocol:'chat-completions', proxy_mode:'auto', proxy_id:'proxy_1', enabled:true, mask:'sk-masked', uses:i, failures:0, models:['model-a']}));
+const keys = Array.from({length:25}, (_,i) => ({id:'key_'+i, name:i===0?'Google kevji1337@gmail.com':'Key '+i, provider_id:'provider_a', provider_name:'Provider A', base_url:i===0?'https://generativelanguage.googleapis.com':providers[0].base_url, api_protocol:'chat-completions', proxy_mode:'auto', proxy_id:'proxy_1', enabled:true, mask:'AIza••••••••cj5Q', uses:2247+i, failures:2206, last_used:'2026-11-26T14:20:00Z', models:['model-a']}));
 const proxies = [{id:'proxy_1', name:'Outbound EU', url:'socks5://proxy.example:1080', enabled:true, has_auth:true, assigned_keys:25}];
 let journalInstance = 'process-1';
 const journal = [
@@ -90,6 +90,10 @@ async function smoke() {
 
   document.querySelector('[data-page="credentials"]').click(); await pause();
   assert(document.querySelectorAll('#keyContent tbody tr').length === 12, 'pagination');
+  if (innerWidth >= 1000) {
+   const keyWrap = document.querySelector('#keyContent .table-wrap');
+   assert(keyWrap.scrollWidth <= keyWrap.clientWidth, 'keys table fits without horizontal scrollbar on desktop');
+  }
   document.getElementById('keyNext').click();
   assert(document.querySelectorAll('#keyContent tbody tr').length === 12, 'next page');
   document.getElementById('keySearch').value = 'Key 24';

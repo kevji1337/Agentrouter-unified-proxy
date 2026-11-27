@@ -110,7 +110,7 @@
     .shell {
       position: relative;
       z-index: 1;
-      width: min(1220px, calc(100% - 36px));
+      width: min(1440px, calc(100% - 36px));
       margin: 0 auto;
       padding: 22px 0 72px;
     }
@@ -617,15 +617,32 @@
       font-variant-numeric: tabular-nums;
     }
     .table-wrap {
-      overflow: auto;
+      overflow-x: auto;
       max-inline-size: 100%;
+      container-type: inline-size;
     }
     table {
-      width: 100%;
+      inline-size: 100%;
       border-collapse: separate;
       border-spacing: 0;
-      min-width: 780px;
+      min-inline-size: 720px;
     }
+    table.keys-table {
+      table-layout: fixed;
+      min-inline-size: 940px;
+    }
+    @container (inline-size >= 940px) {
+      table.keys-table {
+        min-inline-size: 0;
+      }
+    }
+    table.keys-table col.col-name   { inline-size: 18%; }
+    table.keys-table col.col-route  { inline-size: auto; }
+    table.keys-table col.col-mask   { inline-size: 148px; }
+    table.keys-table col.col-status { inline-size: 122px; }
+    table.keys-table col.col-usage  { inline-size: 98px; }
+    table.keys-table col.col-seen   { inline-size: 128px; }
+    table.keys-table col.col-act    { inline-size: 206px; }
     thead {
       position: sticky;
       inset-block-start: 0;
@@ -633,17 +650,20 @@
     }
     th {
       text-align: left;
-      padding: 11px 18px;
+      padding: 10px 12px;
       background: #0a1222;
       border-bottom: 1px solid var(--line);
       color: #8fa1b9;
       font-size: 10.5px;
       text-transform: uppercase;
-      letter-spacing: 0.08em;
+      letter-spacing: 0.07em;
       font-weight: 700;
+      white-space: nowrap;
     }
+    th:first-child, td:first-child { padding-inline-start: 16px; }
+    th:last-child, td:last-child { padding-inline-end: 16px; }
     td {
-      padding: 14px 18px;
+      padding: 12px;
       border-bottom: 1px solid rgba(148, 163, 184, 0.09);
       font-size: 13px;
       vertical-align: middle;
@@ -654,22 +674,65 @@
 
     .key-name {
       font-weight: 650;
-      margin-bottom: 4px;
-      max-width: 280px;
+      margin-bottom: 3px;
+      max-inline-size: 100%;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .cell-truncate {
+      display: block;
+      max-inline-size: 100%;
+      min-inline-size: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .cell-truncate.truncated > span {
+      text-decoration: underline dotted rgba(148, 163, 184, 0.38);
+      text-underline-offset: 3px;
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .cell-truncate.truncated:is(:hover, :focus-visible) {
+        text-overflow: clip;
+      }
+      .cell-truncate.truncated:is(:hover, :focus-visible) > span {
+        display: inline-block;
+        margin-inline-start: 100%;
+        translate: calc(1px - 100%);
+        transition: margin-inline-start 1.8s ease-in, translate 1.8s ease-in;
+      }
+    }
+    .provider-line {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-inline-size: 0;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .provider-line .cell-truncate {
+      flex: 0 1 auto;
+    }
+    .provider-line .proto-pill {
+      flex-shrink: 0;
+    }
+    .usage-cell, .date-cell {
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+      font-size: 12px;
+    }
     .key-id { display: none; }
     .mask {
       display: inline-block;
-      padding: 3px 8px;
+      padding: 2px 7px;
       border-radius: 6px;
       background: rgba(15, 23, 42, 0.85);
       border: 1px solid rgba(148, 163, 184, 0.14);
       font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, SFMono-Regular, Consolas, monospace;
-      font-size: 12px;
+      font-size: 11.5px;
       color: #cbd5e1;
+      white-space: nowrap;
     }
     .route-label {
       display: inline-flex;
@@ -741,7 +804,27 @@
       display: flex;
       justify-content: flex-end;
       align-items: center;
-      gap: 6px;
+      gap: 5px;
+    }
+    td .actions .btn.icon {
+      width: 32px;
+      min-height: 32px;
+      border-radius: 8px;
+    }
+    td .actions .btn.sm {
+      min-height: 32px;
+      padding: 4px 9px;
+    }
+    td .actions .switch {
+      width: 40px;
+      height: 23px;
+    }
+    td .actions .switch span {
+      width: 15px;
+      height: 15px;
+    }
+    td .actions .switch.on span {
+      transform: translateX(17px);
     }
 
     /* Tactile Switch */
@@ -2285,7 +2368,9 @@
       function showToast(message,error){var el=document.getElementById('toast');el.textContent=message;el.className='toast show'+(error?' error':'');clearTimeout(toastTimer);toastTimer=setTimeout(function(){el.className='toast'},3200)}
       async function api(path,options){options=options||{};options.headers=Object.assign({'Content-Type':'application/json','X-Admin-CSRF':'1'},options.headers||{});if(session&&session!=='cookie')options.headers['X-Admin-Session']=session;var response=await fetch(path,options);if(response.status===204)return null;var data=await response.json().catch(function(){return {}});if(response.status===401&&!(data.error&&data.error.code==='admin_reauth_required')){lock();var authError=new Error('Войдите в панель');authError.auth=true;throw authError}if(!response.ok)throw new Error(data.error&&data.error.message||('HTTP '+response.status));return data}
       function lock(){loadSeq++;document.querySelectorAll('dialog[open]').forEach(function(el){el.close()});document.getElementById('revealedToken').value='';document.getElementById('keyValue').value='';document.getElementById('proxyPassword').value='';document.getElementById('editKeyValue').value='';document.getElementById('adminPassword').value='';document.getElementById('accountUserPassword').value='';document.getElementById('adminPasswordForm').reset();logItems=[];lastLogSeq=0;logInstance='';logRequestFilter='';session='';sessionStorage.removeItem('ar_admin_session');setAuthView('login');document.getElementById('adminPassword').focus()}
-      function dateText(value){if(!value)return 'Никогда';return new Intl.DateTimeFormat('ru-RU',{dateStyle:'medium',timeStyle:'short'}).format(new Date(value))}
+      function dateText(value){if(!value)return 'Никогда';var d=new Date(value);var pad=function(n){return String(n).padStart(2,'0')};return pad(d.getDate())+'.'+pad(d.getMonth()+1)+'.'+String(d.getFullYear()).slice(-2)+', '+pad(d.getHours())+':'+pad(d.getMinutes())}
+      var truncObserver=typeof ResizeObserver==='function'?new ResizeObserver(function(entries){entries.forEach(function(entry){entry.target.classList.toggle('truncated',entry.target.scrollWidth>entry.target.clientWidth)})}):null;
+      function observeTruncated(root){if(!truncObserver||!root)return;root.querySelectorAll('.cell-truncate').forEach(function(el){el.classList.toggle('truncated',el.scrollWidth>el.clientWidth);truncObserver.observe(el)})}
 
       async function load(){var seq=++loadSeq;try{var status=await api('/api/admin/status');if(seq!==loadSeq)return;renderStatus(status);setAuthView('authenticated');if(activePage==='overview'){var k=await api('/api/admin/keys');if(seq===loadSeq)renderUsage(k.data||[])}else if(activePage==='credentials'){var data=await Promise.all([api('/api/admin/keys'),api('/api/admin/network-proxies'),api('/api/admin/providers')]);if(seq!==loadSeq)return;currentProxies=data[1].data||[];currentProviders=data[2].data||[];renderKeys(data[0].data||[])}else if(activePage==='providers'){var providers=await api('/api/admin/providers');if(seq===loadSeq)renderProviders(providers.data||[])}else if(activePage==='proxies'){var p=await api('/api/admin/network-proxies');if(seq===loadSeq)renderProxies(p.data||[])}else if(activePage==='clients'){var cData=await Promise.all([api('/api/admin/client-keys'),adminRole==='admin'?api('/api/admin/accounts').catch(function(){return {data:[]}}):Promise.resolve({data:[]})]);if(seq!==loadSeq)return;renderClientKeys(cData[0].data||[]);renderAccounts(cData[1].data||[])}else{await loadLogs(true)}if(seq!==loadSeq||!session)return;login.classList.add('hidden')}catch(error){if(!error.auth){if(authState==='checking'){document.getElementById('sessionLoadingMessage').textContent='Не удалось проверить сессию. Повторите попытку.';document.getElementById('sessionRetry').hidden=false}else{showToast(error.message,true)}}}}
 
@@ -2367,7 +2452,7 @@
         content.querySelectorAll('[data-account-delete]').forEach(function(el){el.onclick=async function(){if(!confirm('Удалить аккаунт «'+el.dataset.accountDelete+'» и отозвать его сессии?'))return;try{await api('/api/admin/accounts/'+encodeURIComponent(el.dataset.accountDelete),{method:'DELETE'});showToast('Аккаунт удалён');await load()}catch(e){showToast(e.message,true)}}});
       }
 
-      function renderKeys(keys){currentKeys=keys;var term=document.getElementById('keySearch').value.toLowerCase();var filtered=keys.filter(function(k){var prefModels=k.provider_prefix?(k.models||[]).map(function(m){return k.provider_prefix+'/'+m}).join(' '):'';return [k.name,k.provider_name,k.provider_prefix,k.base_url,(k.models||[]).join(' '),prefModels].join(' ').toLowerCase().includes(term)});var pages=Math.max(1,Math.ceil(filtered.length/12));keyPage=Math.min(keyPage,pages-1);document.getElementById('keyPageLabel').textContent=(keyPage+1)+' / '+pages+' · '+filtered.length+' ключей';document.getElementById('keyPrev').disabled=keyPage===0;document.getElementById('keyNext').disabled=keyPage>=pages-1;document.getElementById('keyCount').textContent=keys.length;var content=document.getElementById('keyContent');if(!keys.length){content.innerHTML='<div class="empty"><div class="empty-icon">'+icon('M14 7a4 4 0 1 0-7.5 2H3v4h3v3h3v-3h2l1.5-1.5')+'</div><h3>Нет сохранённых ключей</h3><p>Добавьте API-ключ провайдера для балансировки и автоматического failover.</p><button class="btn primary" id="emptyAdd" type="button">Добавить первый ключ</button></div>';document.getElementById('emptyAdd').onclick=openAdd;return}var rows=filtered.slice(keyPage*12,keyPage*12+12).map(function(k){var cooling=!!k.cooldown_until;var state=k.provider_blocked?'Провайдер откл.':(k.network_blocked?'Маршрут недоступен':(cooling?'Cooldown':(k.enabled?'Активен':'Отключён')));var badge=k.provider_blocked||k.network_blocked||cooling?'cool':(k.enabled?'on':'off');return '<tr><td><div class="key-name">'+esc(k.name)+'</div><div class="key-id">'+esc(k.id)+'</div></td><td><div class="key-name">'+esc(k.provider_name||'Legacy endpoint')+'</div><div class="muted" style="font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span>'+esc(k.base_url||defaultUpstream)+'</span>'+protoBadge(k.api_protocol||'responses')+'</div><div class="route-label">'+esc(routeLabel(k))+'</div></td><td><span class="mask">'+esc(k.mask)+'</span></td><td><span class="badge '+badge+'"><span class="dot '+(cooling?'warn':(k.enabled?'good':''))+'"></span>'+state+'</span></td><td><div>'+k.uses+' запр.</div><div class="muted" style="font-size:11px;margin-top:3px">'+k.failures+' ошибок</div></td><td class="muted">'+esc(cooling?('До '+dateText(k.cooldown_until)):dateText(k.last_used))+'</td><td><div class="actions"><button class="switch '+(k.enabled?'on':'')+'" data-toggle="'+esc(k.id)+'" data-enabled="'+k.enabled+'" aria-pressed="'+k.enabled+'" aria-label="'+(k.enabled?'Отключить':'Включить')+' '+esc(k.name)+'"><span></span></button><button class="btn sm" data-edit-key="'+esc(k.id)+'" aria-label="Редактировать '+esc(k.name)+'">Ключ</button><button class="btn icon" data-policy="'+esc(k.id)+'" title="Лимиты и маршрутизация" aria-label="Политика '+esc(k.name)+'"'+(adminRole==='admin'?'':' disabled')+'>'+icon('M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6')+'</button><button class="btn icon" data-test="'+esc(k.id)+'" title="Проверить ключ" aria-label="Проверить '+esc(k.name)+'">'+icon('M5 12h14M13 6l6 6-6 6')+'</button><button class="btn icon danger" data-delete="'+esc(k.id)+'" data-name="'+esc(k.name)+'" title="Удалить" aria-label="Удалить '+esc(k.name)+'">'+icon('M4 7h16M9 7V4h6v3m-9 0 1 14h10l1-14M10 11v6m4-6v6')+'</button></div></td></tr>'}).join('');content.innerHTML='<div class="table-wrap" tabindex="0" role="region" aria-label="API-ключи провайдеров"><table><thead><tr><th>Название</th><th>Провайдер и маршрут</th><th>Маска</th><th>Статус</th><th>Трафик</th><th>Активность</th><th style="text-align:right">Действия</th></tr></thead><tbody>'+rows+'</tbody></table></div>';bindRows()}
+      function renderKeys(keys){currentKeys=keys;var term=document.getElementById('keySearch').value.toLowerCase();var filtered=keys.filter(function(k){var prefModels=k.provider_prefix?(k.models||[]).map(function(m){return k.provider_prefix+'/'+m}).join(' '):'';return [k.name,k.provider_name,k.provider_prefix,k.base_url,(k.models||[]).join(' '),prefModels].join(' ').toLowerCase().includes(term)});var pages=Math.max(1,Math.ceil(filtered.length/12));keyPage=Math.min(keyPage,pages-1);document.getElementById('keyPageLabel').textContent=(keyPage+1)+' / '+pages+' · '+filtered.length+' ключей';document.getElementById('keyPrev').disabled=keyPage===0;document.getElementById('keyNext').disabled=keyPage>=pages-1;document.getElementById('keyCount').textContent=keys.length;var content=document.getElementById('keyContent');if(!keys.length){content.innerHTML='<div class="empty"><div class="empty-icon">'+icon('M14 7a4 4 0 1 0-7.5 2H3v4h3v3h3v-3h2l1.5-1.5')+'</div><h3>Нет сохранённых ключей</h3><p>Добавьте API-ключ провайдера для балансировки и автоматического failover.</p><button class="btn primary" id="emptyAdd" type="button">Добавить первый ключ</button></div>';document.getElementById('emptyAdd').onclick=openAdd;return}var rows=filtered.slice(keyPage*12,keyPage*12+12).map(function(k){var cooling=!!k.cooldown_until;var state=k.provider_blocked?'Провайдер откл.':(k.network_blocked?'Маршрут откл.':(cooling?'Cooldown':(k.enabled?'Активен':'Отключён')));var badge=k.provider_blocked||k.network_blocked||cooling?'cool':(k.enabled?'on':'off');var protoShort={'chat-completions':'chat','responses':'responses','anthropic':'anthropic','genai':'genai'}[k.api_protocol||'responses']||(k.api_protocol||'responses');return '<tr><td><div class="key-name cell-truncate"><span>'+esc(k.name)+'</span></div><div class="key-id">'+esc(k.id)+'</div></td><td><div class="key-name cell-truncate"><span>'+esc(k.provider_name||'Legacy endpoint')+'</span></div><div class="provider-line"><span class="cell-truncate"><span>'+esc(k.base_url||defaultUpstream)+'</span></span><span class="proto-pill proto-'+esc(k.api_protocol||'responses')+'">'+esc(protoShort)+'</span></div><div class="route-label cell-truncate"><span>'+esc(routeLabel(k))+'</span></div></td><td><span class="mask">'+esc(k.mask)+'</span></td><td><span class="badge '+badge+'"><span class="dot '+(cooling?'warn':(k.enabled?'good':''))+'"></span>'+state+'</span></td><td class="usage-cell"><div>'+k.uses+' запр.</div><div class="muted" style="font-size:11px;margin-top:2px">'+k.failures+' ошиб.</div></td><td class="muted date-cell">'+esc(cooling?('До '+dateText(k.cooldown_until)):dateText(k.last_used))+'</td><td><div class="actions"><button class="switch '+(k.enabled?'on':'')+'" data-toggle="'+esc(k.id)+'" data-enabled="'+k.enabled+'" aria-pressed="'+k.enabled+'" aria-label="'+(k.enabled?'Отключить':'Включить')+' '+esc(k.name)+'"><span></span></button><button class="btn sm" data-edit-key="'+esc(k.id)+'" aria-label="Редактировать '+esc(k.name)+'">Ключ</button><button class="btn icon" data-policy="'+esc(k.id)+'" title="Лимиты и маршрутизация" aria-label="Политика '+esc(k.name)+'"'+(adminRole==='admin'?'':' disabled')+'>'+icon('M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6')+'</button><button class="btn icon" data-test="'+esc(k.id)+'" title="Проверить ключ" aria-label="Проверить '+esc(k.name)+'">'+icon('M5 12h14M13 6l6 6-6 6')+'</button><button class="btn icon danger" data-delete="'+esc(k.id)+'" data-name="'+esc(k.name)+'" title="Удалить" aria-label="Удалить '+esc(k.name)+'">'+icon('M4 7h16M9 7V4h6v3m-9 0 1 14h10l1-14M10 11v6m4-6v6')+'</button></div></td></tr>'}).join('');content.innerHTML='<div class="table-wrap" tabindex="0" role="region" aria-label="API-ключи провайдеров"><table class="keys-table"><colgroup><col class="col-name"><col class="col-route"><col class="col-mask"><col class="col-status"><col class="col-usage"><col class="col-seen"><col class="col-act"></colgroup><thead><tr><th>Название</th><th>Провайдер и маршрут</th><th>Маска</th><th>Статус</th><th>Трафик</th><th>Активность</th><th style="text-align:right">Действия</th></tr></thead><tbody>'+rows+'</tbody></table></div>';observeTruncated(content);bindRows()}
 
       function renderUsage(keys){keys=keys.slice().sort(function(a,b){return (b.uses||0)-(a.uses||0)}).slice(0,8);var el=document.getElementById('usageChart');if(!keys.length){el.innerHTML='<div class="muted">Запросов через пул пока не было</div>';return}var maxUses=Math.max.apply(null,keys.map(function(k){return k.uses||0}).concat([1]));el.innerHTML=keys.map(function(k){var pct=Math.max(3,Math.round((k.uses||0)*100/maxUses));return '<div class="chart-row"><span class="chart-name">'+esc(k.name)+'</span><div class="bar-track"><div class="bar-fill" style="width:'+pct+'%"></div></div><span class="chart-stat">'+k.uses+' · $'+Number(k.monthly_spend_usd||0).toFixed(3)+'</span></div>'}).join('')}
 
