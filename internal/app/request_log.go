@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"errors"
@@ -164,15 +165,163 @@ func requestFailureCode(err error) string {
 	return "upstream_error"
 }
 
+const (
+	sseLineCaptureLimit = 128
+	sseDataOverlapBytes = 48
+)
+
+var (
+	sseMarkerMessageStop1       = []byte(`"type":"message_stop"`)
+	sseMarkerMessageStop2       = []byte(`"type": "message_stop"`)
+	sseMarkerResponseCompleted1 = []byte(`"type":"response.completed"`)
+	sseMarkerResponseCompleted2 = []byte(`"type": "response.completed"`)
+)
+
+// sseTerminalTracker scans SSE chunks incrementally with bounded memory to
+// detect terminal stream markers without allocating or buffering the response.
+type sseTerminalTracker struct {
+	completed    bool
+	lineBuf      []byte
+	lineOverflow bool
+	inDataLine   bool
+	dataTail     []byte
+}
+
+func (t *sseTerminalTracker) observe(chunk []byte) {
+	if t.completed || len(chunk) == 0 {
+		return
+	}
+	for len(chunk) > 0 && !t.completed {
+		nl := bytes.IndexByte(chunk, '\n')
+		var seg []byte
+		endedLine := false
+		if nl >= 0 {
+			seg = chunk[:nl]
+			chunk = chunk[nl+1:]
+			endedLine = true
+		} else {
+			seg = chunk
+			chunk = nil
+		}
+		t.feedLineSegment(seg)
+		if endedLine {
+			t.finishLine()
+		} else if !t.lineOverflow && isSSEDoneLine(t.lineBuf) {
+			t.completed = true
+		}
+	}
+}
+
+func (t *sseTerminalTracker) feedLineSegment(seg []byte) {
+	if len(seg) == 0 {
+		return
+	}
+	if !t.lineOverflow {
+		rem := sseLineCaptureLimit - len(t.lineBuf)
+		if len(seg) <= rem {
+			t.lineBuf = append(t.lineBuf, seg...)
+		} else {
+			t.lineBuf = append(t.lineBuf, seg[:rem]...)
+			t.lineOverflow = true
+		}
+		if !t.inDataLine && bytes.HasPrefix(t.lineBuf, []byte("data:")) {
+			t.inDataLine = true
+			t.scanDataPayload(t.lineBuf[len("data:"):])
+			if len(seg) > rem {
+				t.scanDataPayload(seg[rem:])
+			}
+			return
+		}
+	}
+	if t.inDataLine {
+		t.scanDataPayload(seg)
+	}
+}
+
+func (t *sseTerminalTracker) scanDataPayload(seg []byte) {
+	if t.completed || len(seg) == 0 {
+		return
+	}
+	if hasTerminalSSEJSONType(seg) {
+		t.completed = true
+		return
+	}
+	if len(t.dataTail) > 0 {
+		take := min(len(seg), sseDataOverlapBytes)
+		var bridge [sseDataOverlapBytes * 2]byte
+		n := copy(bridge[:], t.dataTail)
+		n += copy(bridge[n:], seg[:take])
+		if hasTerminalSSEJSONType(bridge[:n]) {
+			t.completed = true
+			return
+		}
+	}
+	if len(seg) >= sseDataOverlapBytes {
+		t.dataTail = append(t.dataTail[:0], seg[len(seg)-sseDataOverlapBytes:]...)
+	} else {
+		if len(t.dataTail)+len(seg) > sseDataOverlapBytes {
+			drop := len(t.dataTail) + len(seg) - sseDataOverlapBytes
+			t.dataTail = append(t.dataTail[:0], t.dataTail[drop:]...)
+		}
+		t.dataTail = append(t.dataTail, seg...)
+	}
+}
+
+func (t *sseTerminalTracker) finishLine() {
+	if !t.completed && !t.lineOverflow {
+		if isSSEDoneLine(t.lineBuf) || isSSETerminalEventLine(t.lineBuf) {
+			t.completed = true
+		}
+	}
+	t.lineBuf = t.lineBuf[:0]
+	t.lineOverflow = false
+	t.inDataLine = false
+	t.dataTail = t.dataTail[:0]
+}
+
+func isSSEDoneLine(line []byte) bool {
+	trimmed := bytes.TrimSpace(line)
+	if !bytes.HasPrefix(trimmed, []byte("data:")) {
+		return false
+	}
+	val := bytes.TrimSpace(trimmed[len("data:"):])
+	return bytes.Equal(val, []byte("[DONE]"))
+}
+
+func isSSETerminalEventLine(line []byte) bool {
+	trimmed := bytes.TrimSpace(line)
+	if !bytes.HasPrefix(trimmed, []byte("event:")) {
+		return false
+	}
+	val := bytes.TrimSpace(trimmed[len("event:"):])
+	return bytes.Equal(val, []byte("message_stop")) || bytes.Equal(val, []byte("response.completed"))
+}
+
+func hasTerminalSSEJSONType(b []byte) bool {
+	return bytes.Contains(b, sseMarkerMessageStop1) ||
+		bytes.Contains(b, sseMarkerMessageStop2) ||
+		bytes.Contains(b, sseMarkerResponseCompleted1) ||
+		bytes.Contains(b, sseMarkerResponseCompleted2)
+}
+
 type loggedResponseBody struct {
 	io.ReadCloser
-	ctx  context.Context
-	once sync.Once
+	ctx     context.Context
+	sse     bool
+	tracker sseTerminalTracker
+	once    sync.Once
 }
 
 func (body *loggedResponseBody) Read(buffer []byte) (int, error) {
 	n, err := body.ReadCloser.Read(buffer)
+	if n > 0 && body.sse {
+		body.tracker.observe(buffer[:n])
+	}
 	if err != nil && !errors.Is(err, io.EOF) {
+		canceled := errors.Is(err, context.Canceled) || (body.ctx != nil && errors.Is(body.ctx.Err(), context.Canceled))
+		if body.sse && body.tracker.completed && canceled && !errors.Is(err, errUpstreamIdleTimeout) {
+			return n, io.EOF
+		}
 		body.once.Do(func() {
 			code := requestFailureCode(err)
 			requestLogFromContext(body.ctx).set(map[string]any{"error_code": code, "response_interrupted": true})

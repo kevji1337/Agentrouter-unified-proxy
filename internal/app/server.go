@@ -898,9 +898,12 @@ func (server *proxyServer) requestID(next http.Handler) http.Handler {
 
 type statusWriter struct {
 	http.ResponseWriter
-	status int
-	bytes  int64
-	log    *requestLog
+	status     int
+	bytes      int64
+	log        *requestLog
+	sseChecked bool
+	isSSE      bool
+	sseTracker sseTerminalTracker
 }
 
 func (w *statusWriter) WriteHeader(status int) {
@@ -915,10 +918,19 @@ func (w *statusWriter) Write(data []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
+	if !w.sseChecked {
+		w.sseChecked = true
+		w.isSSE = isEventStream(w.Header())
+	}
 	n, err := w.ResponseWriter.Write(data)
 	w.bytes += int64(n)
+	if w.isSSE && n > 0 {
+		w.sseTracker.observe(data[:n])
+	}
 	if err != nil {
-		w.log.set(map[string]any{"error_code": "client_write_failed", "response_interrupted": true})
+		if !(w.isSSE && w.sseTracker.completed) {
+			w.log.set(map[string]any{"error_code": "client_write_failed", "response_interrupted": true})
+		}
 	}
 	return n, err
 }
@@ -1628,7 +1640,7 @@ func (server *proxyServer) doUpstreamWithMeta(ctx context.Context, inbound http.
 				record.set(map[string]any{"input_tokens": input, "output_tokens": output})
 			})
 		}
-		resp.Body = &loggedResponseBody{ReadCloser: resp.Body, ctx: ctx}
+		resp.Body = &loggedResponseBody{ReadCloser: resp.Body, ctx: ctx, sse: isEventStream(resp.Header) || stream}
 		return resp, meta, nil
 	}
 }
